@@ -14,9 +14,13 @@
 tools/im-patch/          插件补丁集
   build-im.mjs           esbuild 重新打包 lib/index.js
   apply.mjs              把 backup/src-patched 还原进已安装插件并重建
-  backup/src-patched/    修改后的插件源码（14 个文件）
+  backup/src-patched/    修改后的插件源码（21 个文件）
+  im-pause.mjs           全局暂停/恢复 IM（paused 标记，断开所有通道）
+  im-switch.mjs          私聊/群聊双开关命令行（和点击页面共用 switches.json）
+  test-im-switch.mjs     双开关离线自测
   import-qq-stickers.mjs 把 QQ 收藏表情导入本地表情库
-  README.md              每一轮补丁改了什么（按时间线）
+  README.md              每一轮补丁改了什么（按时间线）+ 接手速查
+  package.json/.npmrc    重新打包用的依赖清单和镜像源
 tools/voice/
   gpt-sovits/server.py   GPT-SoVITS 微调音色 HTTP 服务（17862）
   f5/server.py           F5-TTS 零样本音色 HTTP 服务（17861）
@@ -29,8 +33,19 @@ docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
 ```
 
+## 新对话怎么接手
+
+本仓库只是**镜像**，真正的权威副本在 `D:\project for deepseekharness\default-workspace\tools\im-patch`（以及实际安装的插件）。新开对话时让它按这个顺序读：
+
+1. `tools/im-patch/README.md` 的「接手速查」+ 各轮补丁记录；
+2. `C:\Users\yuuki\.dsh\AGENTS.md` 的「IM 机器双开关」「群聊与第三方请求边界」章节；
+3. 需要看当前开关状态就运行 `node tools/im-patch/im-switch.mjs status`（或打开 <http://127.0.0.1:17863/>）。
+
+GitHub 的这份仓库可以用来看改动历史和各版本源码，但**推送时机不一定跟本地同步**，排障以本地为准。
+
 ## 能力
 
+- **私聊 / 群聊双开关**：桌面 `IM开关.url` → <http://127.0.0.1:17863/>，私聊、群聊各自手动开关；两个都关 = 机器人真正离线（断连），打开任意一侧自动重连
 - **语音**：GPT-SoVITS 微调（大肥鱼）→ F5-TTS → Kokoro → Windows 音色的四级回退；自动拉取/停止服务，只保留当前音色占显存
 - **表情包**：QQ 收藏表情导入本地库，模型用 `<dsh_im_sticker>关键词</dsh_im_sticker>` 触发
 - **语音标记**：`<dsh_im_voice>要说的话</dsh_im_voice>`，任何人要求都能发

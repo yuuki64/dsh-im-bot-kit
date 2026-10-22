@@ -3,6 +3,11 @@ node_modules/
 tools/im-patch/pristine/
 tools/im-patch/reference/
 tools/im-patch/backup/lib-index.js.orig
+# full bundle backups are big (9 MB each) and not needed to rebuild
+tools/im-patch/backup/lib-index.js.*
+tools/im-patch/backup/pre-apply-*/
+tools/im-patch/*.tgz
+tools/im-patch/package-lock.json.orig
 
 # runtime data (never commit)
 *.log
