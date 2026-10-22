@@ -1,0 +1,158 @@
+# 维护手册
+
+这套东西由四层组成：**DSH 桌面端 → dsh-im 插件（已打补丁）→ 语音 sidecar → 配置/人设**。
+升级或出问题时，先判断是哪一层。
+
+## 0. 关键路径速查
+
+| 东西 | 位置 |
+| --- | --- |
+| 已安装插件 | `C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im` |
+| 插件 bundle | `<插件>\lib\index.js`（改动必须重建） |
+| 补丁源文件 | `tools\im-patch\backup\src-patched\` |
+| DSH 主目录 | `C:\Users\yuuki\.dsh`（junction → `D:\project for deepseekharness\dsh-home`） |
+| 机器人工作区 | `C:\Users\yuuki\.dsh\im`（junction → `D:\project for deepseekharness\bot-workspace`） |
+| 音色配置 | `%DSH_HOME%\integrations\dsh-im\voice.json` |
+| 表情库配置 | `%DSH_HOME%\integrations\dsh-im\stickers.json` |
+| 表情图片库 | `%DSH_HOME%\integrations\dsh-im\stickers\` |
+| 人设（生效） | `%DSH_HOME%\integrations\dsh-im\persona.md` |
+| 人设库 | `%DSH_HOME%\integrations\dsh-im\personas\` |
+| 群聊推理上限 | `%DSH_HOME%\integrations\dsh-im\group-reasoning.json` |
+| 群消息归档 | `%DSH_HOME%\integrations\dsh-im\group-history.sqlite` |
+| 语音服务日志 | `D:\tools\gpt-sovits\server.out.log` / `D:\tools\tts-gpu\server.out.log` |
+| 会话日志 | `%DSH_HOME%\sessions\<workspace>\<session>\session.v4.jsonl.zstd` |
+
+## 1. 日常维护（不需要重启）
+
+- **换人设**：把 `personas/<名字>.md` 复制成 `persona.md`，下一条消息生效。
+- **换音色（已有角色）**：QQ 里 `/voice set gsv|gpu|xiaobei`、`/voice char <名字>`、`/voice speed 0.9`。
+- **加表情**：图片丢进 `stickers\`，文件名带关键词（如 `可爱_猫猫.gif`）可被 `/sticker 可爱` 命中。
+- **改群规/态度/称呼**：编辑 `%DSH_HOME%\AGENTS.md`，保存即生效（IM 会话每次重建提示词时读取）。
+- **调推理上限**：主人在群里 `/effort low|medium|high`（仅主人）。
+
+## 2. 插件升级后如何重打补丁（最常见）
+
+DSH 自动更新或重装插件后，`lib/index.js` 会变回官方版本，补丁全部失效。流程：
+
+```powershell
+# 进入本仓库
+pwsh scripts/rebuild.ps1
+```
+
+脚本做三件事：
+
+1. `node tools/im-patch/apply.mjs` — 把 `backup/src-patched/*.mjs` 还原到已安装插件的 `src/`，并恢复 `node_modules/silk-wasm`
+2. `node tools/im-patch/build-im.mjs` — 用 esbuild 把 `plugin-src/host/index.mjs` + `src/channels/**` 重新打成 `lib/index.js`
+3. 打印校验结果（补丁文件是否一致、bundle 是否包含关键标记）
+
+然后**完全退出并重开 DSH**。
+
+### 如果 apply.mjs 报错
+
+- `找不到 ...src`：插件版本结构变了，需要先对照新版本重新确认文件清单（`apply.mjs` 里的 `FILES` 数组）。
+- `silk-wasm` 缺失：`tools\im-patch\node_modules\silk-wasm` 被清理了，重新 `npm i silk-wasm` 到该目录。
+- `npm`/`esbuild` 缺失：在 `tools\im-patch` 里 `npm install`（依赖清单见 package.json）。
+
+### 校验是否生效
+
+```powershell
+# 应该能搜到这些补丁标记
+Select-String -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im\lib\index.js" -Pattern "dsh_im_voice","dsh_im_sticker","17862" -SimpleMatch
+```
+
+## 3. 语音服务维护
+
+### 3.1 启动/停止
+
+插件会在启动时读 `voice.json`，**只拉起当前音色的服务**并停掉另一个。手动操作：
+
+```powershell
+# GPT-SoVITS（17862）
+D:\tools\gpt-sovits\venv\Scripts\python.exe D:\tools\gpt-sovits\server.py --port 17862 --preload
+
+# F5-TTS（17861）
+D:\tools\Python311\python.exe D:\tools\tts-gpu\server.py --port 17861 --preload
+
+# 关闭
+Invoke-RestMethod -Method Post http://127.0.0.1:17862/shutdown
+```
+
+### 3.2 常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 语音要等 20 秒 | sidecar 冷启动；插件已加启动预热，重启 DSH 即可 |
+| 声音发颤/糊 | 检查 server 是否削波（`wav_bytes` 里归一化逻辑），或换参考音 |
+| 没有声音 | 看 `server.out.log`；确认 `voice.json` 的 provider；确认端口健康 `GET /health` |
+| 显存不够 | 确认只跑一个 sidecar；`/voice set` 切换会自动停另一个 |
+| 参考音要换 | `characters\<名字>.wav` + 同名 `.txt`，`/voice char <名字>` |
+
+### 3.3 重新微调（可选）
+
+GPT-SoVITS 微调产物：`D:\tools\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推理配置 `tts_infer_finetuned.yaml`。
+重训大致流程（细节见 `tools/voice/gpt-sovits/README` 或上游文档）：
+
+1. 数据放 `dataset\wav32k` + `dafeiyu.list`
+2. 跑 `GPT_SoVITS\prepare_datasets\{1,2,3}-*.py`（环境变量见插件 README 历史记录）
+3. `s2_train.py --config s2_dafeiyu.json`（4–8 epoch，4060 约 20–30 分钟）
+4. 用 `process_ckpt.savee` 把 `logs_s2_v2\G_*.pth` 转成推理格式
+5. 改 `tts_infer_finetuned.yaml` 的 `vits_weights_path`，重启 17862
+
+## 4. 配置项
+
+`voice.json`
+
+```json
+{ "version": 1, "provider": "gsv", "voice": "gsv", "character": "dafeiyu",
+  "steps": 16, "speed": 0.9, "pitch": 15, "rate": 0 }
+```
+
+- provider：`gsv`（GPT-SoVITS）/ `f5`（F5）/ `kokoro`（本地 CPU）/ `onecore`、`sapi`（Windows）
+- speed：0.5–2.0；character：`characters\<名字>.wav`
+
+`stickers.json`
+
+```json
+{ "version": 1, "dirs": ["C:/Users/yuuki/.dsh/integrations/dsh-im/stickers", "D:/yuuki/qq/Tencent Files/<QQ号>/nt_qq/nt_data/Emoji/emoji-related/emoji"], "maxBytes": 3145728 }
+```
+
+## 5. 群聊行为速查
+
+- 点名：`yuri` / `小鲸鱼` / `DeepSeek` / `大肥鱼`（大肥鱼是雷点，会炸毛）
+- 被点名后同一人 10 分钟内继续说话自动接，多人叫互不覆盖
+- 说“没跟你说话 / 别插嘴 / 没叫你 / 关你什么事 / 别接话” → 回一句“行，那我先不打扰了。”然后停止
+- @ 了别人 → 立即清空接续，不再插话
+- 其他机器人点名 → 会回，带节流（15 秒/次，5 分钟最多 8 次）
+- 群聊最多两句话、不泄露本机路径/工具/模型信息、推理上限默认 low（主人可改）
+
+## 6. 日志与排错
+
+- 语音服务：`D:\tools\gpt-sovits\server.out.log`、`server.err.log`
+- 插件失败诊断：`%DSH_HOME%\logs\dsh-im\YYYY-MM-DD.log`（没有该目录说明没触发过失败记录）
+- QQ 消息归档：`group-history.sqlite` 的 `messages` 表（能确认消息是否真的推到了机器人）
+- 会话内容：`sessions\...\session.v4.jsonl.zstd`（zstd 多帧，按 `28 b5 2f fd` 切帧解码）
+
+## 7. 备份与回滚
+
+- 每次大改动前：`git add -A && git commit`（本仓库），另外可复制 `backup/src-patched`。
+- 插件回滚：`npm i @xmanrui/dsh-im@<旧版本>` 后重新运行 `scripts/rebuild.ps1`。
+- DSH 回滚：安装旧版 DSH，再按第 2 节重打补丁。
+- 语音权重/模型：`D:\tools\gpt-sovits\` 与 `D:\tools\tts-gpu\` 不在仓库里，建议单独备份到移动硬盘。
+
+## 7.1 一键备份
+
+```powershell
+# 备份到 D:\backups，生成 dsh-im-kit-<时间戳>.zip（约 100 MB）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup.ps1 -OutDir D:\backups
+```
+
+包含：项目文件、voice/stickers/persona 配置、人设、表情库、两个语音服务源码、微调权重（81 MB）、
+参考音、数据集清单、AGENTS.md 副本。**不包含**：GPT-SoVITS/F5 的模型权重（5 GB 级，可重新下载）、
+venv、node_modules。恢复时解压后按第 2 节重打补丁、按第 3 节重建环境即可。
+
+## 8. 定期检查清单
+
+- 每周：DSH/插件是否更新 → 更新后重跑 `scripts/rebuild.ps1` 并重启
+- 每周：看一次 `server.err.log` 与 `logs\dsh-im` 有无新错误
+- 每月：备份 `%DSH_HOME%\integrations\dsh-im`（配置 + 表情 + 人设）和语音权重
+- 换电脑：装 DSH + 插件 → clone 本仓库 → 改路径常量 → 放回模型/表情 → 重建
