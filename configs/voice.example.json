@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "provider": "gsv",
+  "voice": "gsv",
+  "character": "dafeiyu",
+  "steps": 16,
+  "speed": 0.9,
+  "pitch": 15,
+  "rate": 0
+}
