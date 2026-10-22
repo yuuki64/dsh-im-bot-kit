@@ -34,6 +34,7 @@ configs/
 docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
 docs/NEW-SESSION.md      新会话开场白（复制即用，接手本项目）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
+scripts/push-with-token.mjs 带 token + 本地代理推送（token 放 .github-token，不进 git 配置）
 ```
 
 ## 新对话怎么接手
