@@ -176,3 +176,25 @@ venv、node_modules。恢复时解压后按第 2 节重打补丁、按第 3 节�
 - 每周：看一次 `server.err.log` 与 `logs\dsh-im` 有无新错误
 - 每月：备份 `%DSH_HOME%\integrations\dsh-im`（配置 + 表情 + 人设）和语音权重
 - 换电脑：装 DSH + 插件 → clone 本仓库 → 改路径常量 → 放回模型/表情 → 重建
+
+## 9. 版本与发布（GitHub Releases）
+
+仓库的 Releases **不会**因为 `git push` 自动出现：必须「打 tag → 推送 tag → 建 release」（网页或 API）。
+
+```powershell
+cd <WORKSPACE>\im-bot-kit
+
+# 1. 打版本标签（示例 v0.2）
+git tag -a v0.2 -m "v0.2"
+
+# 2. 推提交 + 标签（token 放仓库根的 .github-token，已被 gitignore；脚本自动探测本地代理）
+node scripts/push-with-token.mjs main --tags
+
+# 3. 建 release：GitHub 仓库页 → Releases → Create a new release → 选 v0.2 → 写正文 → Publish
+```
+
+Release 正文建议只写三行：这版加了什么 / 升级方式（重跑 `scripts/rebuild.ps1` + 重启 DSH）/ 已知限制。
+**不要上传二进制**：模型权重、venv、node_modules 都不进仓库。
+
+`Packages` 一栏保持为空是正常的——本项目不发布 npm 包或容器镜像，别人 clone 源码跑脚本就是正确用法。
+换机器接手仍按 [NEW-SESSION.md](NEW-SESSION.md) 的开场白走。
