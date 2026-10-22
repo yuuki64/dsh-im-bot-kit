@@ -32,6 +32,7 @@ configs/
   persona.example.md     当前生效人设
   personas/              人设卡（傲娇助手 / 小鲸鱼 / 说明）
 docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
+docs/NEW-SESSION.md      新会话开场白（复制即用，接手本项目）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
 ```
 
@@ -42,6 +43,8 @@ scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
 1. `tools/im-patch/README.md` 的「接手速查」+ 各轮补丁记录；
 2. `<DSH_HOME>\AGENTS.md` 的「IM 机器双开关」「群聊与第三方请求边界」章节；
 3. 需要看当前开关状态就运行 `node tools/im-patch/im-switch.mjs status`（或打开 <http://127.0.0.1:17863/>）。
+
+不想自己交代背景：直接复制 [docs/NEW-SESSION.md](docs/NEW-SESSION.md) 里的开场白，粘给新会话，末尾补一句任务即可。
 
 GitHub 的这份仓库可以用来看改动历史和各版本源码，但**推送时机不一定跟本地同步**，排障以本地为准。
 
