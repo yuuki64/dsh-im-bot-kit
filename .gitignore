@@ -1,0 +1,22 @@
+# deps / build output
+node_modules/
+tools/im-patch/pristine/
+tools/im-patch/reference/
+tools/im-patch/backup/lib-index.js.orig
+
+# runtime data (never commit)
+*.log
+*.wav
+*.silk
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+models/
+weights/
+characters/
+dataset/
+logs/
+
+# never commit credentials
+.github-token
