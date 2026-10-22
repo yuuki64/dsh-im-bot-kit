@@ -81,16 +81,30 @@ console.log(`proxy : ${proxy ?? '(直连)'}`);
 console.log(`branch: ${branch}`);
 
 let code = 0;
+let lastDetail = '';
 try {
-  execFileSync('git', ['-C', repoRoot, 'remote', 'set-url', 'origin', `${url.protocol}//x-access-token:${token}@${url.host}${url.pathname}`], { env });
-  const out = execFileSync('git', ['-C', repoRoot, 'push', 'origin', branch], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
-  console.log('push ok');
-  if (out.trim()) console.log(mask(out));
-} catch (err) {
-  code = 1;
-  const detail = [err.stdout, err.stderr].filter(Boolean).map((b) => b.toString()).join('\n');
-  console.error('push failed');
-  console.error(mask(detail).trim());
+  // Different token kinds want different credential forms. Try them in order and
+  // keep the first one GitHub accepts (classic PAT / fine-grained PAT / app token).
+  const credentialForms = [`x-access-token:${token}`, `oauth2:${token}`, `${token}:`, token];
+  const remoteUrlFor = (cred) => `${url.protocol}//${cred}@${url.host}${url.pathname}`;
+  let ok = false;
+  for (const cred of credentialForms) {
+    execFileSync('git', ['-C', repoRoot, 'remote', 'set-url', 'origin', remoteUrlFor(cred)], { env });
+    try {
+      const out = execFileSync('git', ['-C', repoRoot, 'push', 'origin', branch], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+      console.log('push ok');
+      if (out.trim()) console.log(mask(out));
+      ok = true;
+      break;
+    } catch (err) {
+      lastDetail = [err.stdout, err.stderr].filter(Boolean).map((b) => b.toString()).join('\n');
+    }
+  }
+  if (!ok) {
+    code = 1;
+    console.error('push failed');
+    console.error(mask(lastDetail).trim());
+  }
 } finally {
   execFileSync('git', ['-C', repoRoot, 'remote', 'set-url', 'origin', plain], { env });
   const restored = git(['remote', 'get-url', 'origin'], env).trim();

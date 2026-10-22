@@ -10,6 +10,14 @@
 
 > 文中 `<DSH_HOME>`（= `C:\Users\<你>\.dsh`）/ `<WORKSPACE>` / `<BOT_WORKSPACE>` / `<TOOLS>`（语音与模型目录，如 `D:\tools`）/ `<QQ_DATA>` / `<DESKTOP>` 为路径占位符，按本机实际路径替换。
 
+## 接手必读（新会话 / 换机器，先看这三条）
+
+1. **权威副本在本地，不在 GitHub**：真正生效的是 `<WORKSPACE>\tools\im-patch` + 已安装插件；本仓库只是镜像，可能落后。排障一律以本地为准。
+2. **改完必须重新打包 + 重启 DSH**：`node tools/im-patch/apply.mjs`（或 `build-im.mjs`）→ 完全退出 DSH 再打开。重启前不要说“已生效”。
+3. **推送要代理、token 只放本地**：本机直连 `github.com` 常失败，用 `node scripts/push-with-token.mjs`（自动探测本地代理、从 `.github-token` 读 token、用完把 remote 还原成纯 URL、输出脱敏）。
+
+新会话不想交代背景，直接把 [docs/NEW-SESSION.md](docs/NEW-SESSION.md) 里的开场白粘过去，末尾补一句任务即可。
+
 ## 目录
 
 ```text
