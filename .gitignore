@@ -25,3 +25,7 @@ logs/
 
 # never commit credentials
 .github-token
+.github-token.*
+*.token
+.env
+.env.*
