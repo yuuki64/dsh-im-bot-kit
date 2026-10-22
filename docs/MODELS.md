@@ -3,7 +3,7 @@
 这些文件体积大（合计约 4–6 GB），可从公网重新获取，因此没有放进 git 仓库和默认备份 zip。
 换电脑或恢复时按此表放回对应位置。
 
-## GPT-SoVITS（`D:\tools\gpt-sovits`）
+## GPT-SoVITS（`<TOOLS>\gpt-sovits`）
 
 | 文件 | 大小 | 来源 |
 | --- | --- | --- |
@@ -20,7 +20,7 @@
 参考音（**已在备份里**）：`characters\dafeiyu.{wav,txt}`
 数据集清单（**已在备份里**）：`dataset\metadata.csv`、`dataset\dafeiyu.list`
 
-## F5-TTS（`D:\tools\tts-gpu`）
+## F5-TTS（`<TOOLS>\tts-gpu`）
 
 | 文件 | 大小 | 来源 |
 | --- | --- | --- |
@@ -32,9 +32,9 @@
 
 ## Python 运行时
 
-- `D:\tools\Python311`（3.11.9，安装包 26 MB，可重新安装）
-- `D:\tools\gpt-sovits\venv`（torch 2.6+cu124、f5-tts、funasr 等，重建见 README）
-- `D:\tools\bin\ffmpeg.exe`（`pip install imageio-ffmpeg` 后复制）
+- `<TOOLS>\Python311`（3.11.9，安装包 26 MB，可重新安装）
+- `<TOOLS>\gpt-sovits\venv`（torch 2.6+cu124、f5-tts、funasr 等，重建见 README）
+- `<TOOLS>\bin\ffmpeg.exe`（`pip install imageio-ffmpeg` 后复制）
 
 ## 校验方式
 
