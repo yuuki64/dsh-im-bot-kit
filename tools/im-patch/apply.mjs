@@ -29,7 +29,7 @@ const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
 const profile = process.env.DSH_PROFILE_DIR ?? join(home, 'profiles', 'desktop');
 const pluginRoot = join(profile, 'node_modules', '@xmanrui', 'dsh-im');
 
-/** 备份文件名 -> 插件内相对路径（src 下） */
+/** 备份文件名 -> [插件内相对路径, 基线目录（src 或 plugin-src/host）] */
 const FILES = [
   ['src_channels_qq_qq-bridge.mjs', 'channels/qq/qq-bridge.mjs'],
   ['src_channels_shared_group-history-store.mjs', 'channels/shared/group-history-store.mjs'],
@@ -44,11 +44,16 @@ const FILES = [
   ['src_channels_shared_sticker-library.mjs', 'channels/shared/sticker-library.mjs'],
   ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],
   ['src_channels_shared_group-reasoning.mjs', 'channels/shared/group-reasoning.mjs'],
+  ['src_channels_shared_im-switch.mjs', 'channels/shared/im-switch.mjs'],
+  ['src_channels_shared_im-switch-server.mjs', 'channels/shared/im-switch-server.mjs'],
+  ['src_channels_shared_inbound-access.mjs', 'channels/shared/inbound-access.mjs'],
   ['src_channels_shared_semantic_artifact.mjs', 'channels/shared/semantic/artifact.mjs'],
   ['src_channels_shared_semantic_artifact-delivery.mjs', 'channels/shared/semantic/artifact-delivery.mjs'],
   ['src_channels_weixin_weixin-api.mjs', 'channels/weixin/weixin-api.mjs'],
   ['src_channels_weixin_weixin-bridge.mjs', 'channels/weixin/weixin-bridge.mjs'],
+  ['plugin-src_host_channels_shared_startup.mjs', 'channels/shared/startup.mjs', 'plugin-src/host'],
 ];
+
 
 function fail(message) {
   console.error(`ERROR ${message}`);
@@ -65,14 +70,14 @@ const backupRoot = join(here, 'backup', 'src-patched');
 const missing = FILES.filter(([name]) => !existsSync(join(backupRoot, name)));
 if (missing.length) fail(`补丁集缺文件：${missing.map(([n]) => n).join(', ')}`);
 
-const target = (rel) => join(pluginRoot, 'src', rel);
-const same = ([name, rel]) => {
-  const live = target(rel);
+const target = (rel, base = 'src') => join(pluginRoot, base, rel);
+const same = ([name, rel, base]) => {
+  const live = target(rel, base);
   return existsSync(live) && readFileSync(live).equals(readFileSync(join(backupRoot, name)));
 };
 
 if (checkOnly) {
-  for (const entry of FILES) console.log(`${same(entry) ? 'OK  ' : 'DIFF'} ${entry[1]}`);
+  for (const entry of FILES) console.log(`${same(entry) ? 'OK  ' : 'DIFF'} ${entry[2] ? `${entry[2]}/` : ''}${entry[1]}`);
   const silk = existsSync(join(pluginRoot, 'node_modules', 'silk-wasm'));
   console.log(`${silk ? 'OK  ' : 'MISS'} node_modules/silk-wasm`);
   const lib = join(pluginRoot, 'lib', 'index.js');
@@ -83,19 +88,19 @@ if (checkOnly) {
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const preApply = join(here, 'backup', `pre-apply-${stamp}`);
-for (const [name, rel] of FILES) {
-  const live = target(rel);
+for (const [name, rel, base] of FILES) {
+  const live = target(rel, base);
   if (!existsSync(live)) continue;
   const to = join(preApply, name);
   mkdirSync(dirname(to), { recursive: true });
   cpSync(live, to);
 }
 
-for (const [name, rel] of FILES) {
-  const live = target(rel);
+for (const [name, rel, base] of FILES) {
+  const live = target(rel, base);
   mkdirSync(dirname(live), { recursive: true });
   cpSync(join(backupRoot, name), live);
-  console.log(`copied  ${rel}`);
+  console.log(`copied  ${base ? `${base}/` : 'src/'}${rel}`);
 }
 
 const silkSource = join(here, 'node_modules', 'silk-wasm');
@@ -117,7 +122,15 @@ console.log(build.stdout?.trim());
 
 const libPath = join(pluginRoot, 'lib', 'index.js');
 const lib = readFileSync(libPath, 'utf8');
-const markers = ['imagesForPlatformMessage', 'sendVoice', 'import("silk-wasm")', 'voice.silk'];
+const markers = [
+  'imagesForPlatformMessage',
+  'sendVoice',
+  'import("silk-wasm")',
+  'voice.silk',
+  'chat-switch-off',
+  'switch page ready',
+  '/api/state',
+];
 const absent = markers.filter((marker) => !lib.includes(marker));
 if (absent.length) fail(`打包结果缺少标记：${absent.join(', ')}`);
 console.log(`built   lib/index.js (${statSync(libPath).size} B，标记齐全)`);

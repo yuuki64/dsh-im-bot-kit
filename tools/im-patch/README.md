@@ -12,6 +12,19 @@
 补丁日期：2026-10-22
 状态：**代码已改、已重新打包、已离线自测**；生效需要重启 DSH（插件在启动时加载 `lib/index.js`）。
 
+## 接手速查（新对话从这里开始，2026-10-22 21:57 更新）
+
+- **权威文件（最新，先读这两个）**：
+  1. 本文件 —— 补丁集每一轮改了什么、怎么恢复、怎么排查；
+  2. `C:\Users\yuuki\.dsh\AGENTS.md` 里的「IM 机器双开关」和「群聊与第三方请求边界」章节 —— 行为规则（人设、权限、语音/表情规则都在这）。
+- **代码 vs 运行数据**：代码在本目录 + 已安装插件；运行数据在 `C:\Users\yuuki\.dsh\integrations\dsh-im\`（`switches.json` / `paused` / `voice.json` / `persona.md` / `group-history.sqlite` / `stickers.json`），QQ 凭据与工作区映射在 `integrations\dsh-qq\`。
+- **插件安装位置**：`C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im`；运行的是 `lib\index.js`，改了 `src/` 或 `plugin-src/` 必须重新打包并重启 DSH。
+- **开源镜像**：`D:\project for deepseekharness\default-workspace\im-bot-kit`（= <https://github.com/yuuki64/dsh-im-bot-kit>），是本目录 + 语音服务 + 配置 + 维护手册的副本。**镜像可能落后于本目录，排障一律以本目录和实际安装的插件为准**；镜像由 `im-bot-kit` 仓库单独提交/推送。
+- **日常操作**：
+  - 私聊/群聊开关：<http://127.0.0.1:17863/>（桌面 `IM开关.url`）；命令行 `node im-switch.mjs status | direct on|off | group on|off | all on|off`；
+  - 全局暂停：`node im-pause.mjs on|off|status`；
+  - 当前状态以 `switches.json` / `paused` 文件为准，用 `node im-switch.mjs status` 一条命令看清。
+
 ## 0. 一句话恢复
 
 插件重装/升级后补丁被冲掉时：
@@ -19,7 +32,7 @@
 ```powershell
 cd "D:\project for deepseekharness\default-workspace\tools\im-patch"
 node apply.mjs --check   # 先看缺什么
-node apply.mjs           # 复制 9 个文件 + 补 silk-wasm + 重新打包
+node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
 ```
 
 然后完全退出 DSH 再打开。注意补丁集按 5.2.0 的文件内容制作，插件版本不是 5.2.0 时脚本会拒绝（`--force` 等于把那几个文件降级，不推荐）。
@@ -341,3 +354,63 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 - 对方强在：OneBot/SnowLuma 接全量 QQ 消息、控制台、token/花费看板、社会仿真（潜水/主动接话）、黑话学习、表情 CDN 兜底、每会话初始提示词、每会话模型选择、审批转发、长轮询等（v0.2.0-r4，适配 DSH 0.2.0-rc.2）。
 - 我们强在：DSH 原生插件（无独立桥接进程/无 OneBot 依赖）、QQ 官方机器人 API + 微信通道、引用图片/文件可读、群历史归档 + 查询工具、语音（GPT-SoVITS 微调/F5/Kokoro）、表情包库、群推理上限、访问边界策略。
 - 本轮已吸收：人设提示词机制（personas + 注入）。未吸收（按需再说）：控制台/token 看板、社会仿真、黑话学习、每会话模型选择、表情 CDN。
+
+---
+
+## 13. IM 总开关（暂停 / 恢复，2026-10-22）
+
+- 插件管理页没有“停用机器人”开关，QQ 卡片里的“移除接入”会删凭据，所以自建了暂停机制。
+- 标记文件：`C:\Users\yuuki\.dsh\integrations\dsh-im\paused`（存在 = 全部 IM 通道暂停）。
+- 命令（任意目录可跑，Node 22 路径见 `~/.dsh/dsh-runtimes`）：
+  - `node tools/im-patch/im-pause.mjs on` → 暂停 IM + 停语音 sidecar
+  - `node tools/im-patch/im-pause.mjs off` → 恢复 IM（语音按需拉起）
+  - `... status` → 当前状态
+- 实现：`plugin-src/host/channels/shared/startup.mjs` 每 5 秒轮询标记；暂停时断开 production 连接，恢复时重建，不删凭据。
+- 首次上线该功能需要重启 DSH；之后热切换。
+
+---
+
+## 14. 私聊 / 群聊双开关（2026-10-22 晚，点击页面）
+
+### 14.1 需求与做法
+用户要「私聊、群聊分开手动点击开关」。全局暂停只能全停，之前的 workaround 是改 `workspaces.json` 的 allowlist（还有主人豁免的残留）。现在做成两侧独立开关：
+
+| 层 | 文件 | 说明 |
+| --- | --- | --- |
+| 状态 | `C:\Users\yuuki\.dsh\integrations\dsh-im\switches.json` | `{"version":1,"direct":true,"group":true,"updatedAt":"..."}`；`true` = 正常回复，`false` = 该侧入站全部丢弃 |
+| 判定 | `src/channels/shared/im-switch.mjs`（新增） | 读写状态文件（mtime 缓存）、`chatSwitchDecision()`、`switchSnapshot()` |
+| 门禁 | `src/channels/shared/inbound-access.mjs`（改） | **在访问策略和主人豁免之前**先查开关，命中返回 `{allowed:false, reason:'chat-switch-off'}`；QQ/微信的拒绝分支对该 reason 是静默的（只 markSeen，不回复、不计数为回复） |
+| 页面/服务 | `src/channels/shared/im-switch-server.mjs`（新增） | 127.0.0.1:17863（`DSH_IM_SWITCH_PORT` 可改）的点击页面 + JSON API；插件启动时由 `startup.mjs` 拉起（幂等、失败不影响通道） |
+| 启动 | `plugin-src/host/channels/shared/startup.mjs`（改） | `installProductionChannel()` 里调 `startImSwitchServer()` |
+| CLI | `tools/im-patch/im-switch.mjs`（新增） | `status` / `direct on\|off` / `group on\|off` / `all on\|off` / `open` |
+
+关机状态下那一侧**完全静默**：不回复、不建会话、不显示“没权限”，并把消息标记为已读（避免恢复后补回旧消息）。群历史归档（引用图用）不受影响，仍照常记录。
+
+**两个都关 = 真正离线**（2026-10-22 21:42 补）：`startup.mjs` 的 5 秒轮询除了暂停标记也看开关文件，`isImPaused() || !anyChatEnabled()` 时关闭 production 连接；DSH 左侧工作区的“在线”徽标随 socket 变成离线。只要有一侧打开就保持连接、只按那一侧处理。这样“都关掉”在界面上也是诚实的离线状态。
+
+### 14.2 怎么用
+- 桌面快捷方式 `IM开关.url`（`C:\Users\yuuki\OneDrive\桌面\IM开关.url`）→ 浏览器打开 `http://127.0.0.1:17863/`，页面上「私聊」「群聊」两个开关，点一下立即生效。
+- 页面轮询 4 秒同步外部改动；底部显示全局暂停状态（暂停时两侧开关不生效）。
+- 命令行等价：`node im-switch.mjs direct off` 等，写的是同一个文件，热生效。
+
+### 14.3 安全边界
+- 服务只绑 `127.0.0.1`；POST 必须 `application/json`，且 Origin 必须是本机回环（浏览器跨站表单/简单请求会被 415/403 拒绝，防 CSRF）。
+- 页面没有账号体系，但只有本机可访问；和 DSH 本身一样，拿到本机访问权就能操作。
+
+### 14.4 自测（离线跑过，2026-10-22）
+```powershell
+cd "D:\project for deepseekharness\default-workspace\tools\im-patch"
+node test-im-switch.mjs
+```
+覆盖：默认全开 / 写文件 / mtime 读取 / 共享门禁返回 `chat-switch-off` / 页面 200 / `/api/state` 读写 / 非 JSON 415 / 跨源 403 / 404。全部通过。
+运行时 bundle 校验：`lib/index.js` 含 `chat-switch-off`、`switch page ready`、`/api/state`、`switches.json`，导入导出仍为 `apply/createImHostPlugin/inject/name`。
+
+### 14.5 生效条件
+- 本轮改了 `lib/index.js`（两次重新打包：双开关 + 两关即离线），**必须完全退出 DSH 再打开**才加载新 bundle。
+- 之后开关本身是热生效的（文件/页面/CLI 改完，5 秒内按新状态处理/断连/重连），不用再重启。
+- 回滚：
+  1. 运行时：`Copy-Item tools\im-patch\backup\lib-index.js.before-offline-20261022 <插件>\lib\index.js -Force`（或更早的 `lib-index.js.before-switch-20261022`），重启 DSH。
+  2. 源码：`node apply.mjs --force` 会把 `backup/src-patched` 里的版本重新铺上去（含本轮补丁）。
+
+### 14.6 apply.mjs 同步
+`FILES` 现已支持第二基线目录（`plugin-src/host`），并新增 4 个条目：`im-switch.mjs`、`im-switch-server.mjs`、`inbound-access.mjs`、`plugin-src/host/channels/shared/startup.mjs`（最后这个此前只存在于 `backup/src-patched`，`apply.mjs` 没收录，重装插件后会漏掉暂停功能 —— 本轮一并补上）。

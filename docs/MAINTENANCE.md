@@ -19,6 +19,9 @@
 | 人设库 | `%DSH_HOME%\integrations\dsh-im\personas\` |
 | 群聊推理上限 | `%DSH_HOME%\integrations\dsh-im\group-reasoning.json` |
 | 群消息归档 | `%DSH_HOME%\integrations\dsh-im\group-history.sqlite` |
+| 私聊/群聊开关 | `%DSH_HOME%\integrations\dsh-im\switches.json`（`true`=开） |
+| 开关点击页 | `http://127.0.0.1:17863/`（插件启动时自带，桌面 `IM开关.url`） |
+| 全局暂停标记 | `%DSH_HOME%\integrations\dsh-im\paused`（存在=全部通道离线） |
 | 语音服务日志 | `D:\tools\gpt-sovits\server.out.log` / `D:\tools\tts-gpu\server.out.log` |
 | 会话日志 | `%DSH_HOME%\sessions\<workspace>\<session>\session.v4.jsonl.zstd` |
 
@@ -29,6 +32,23 @@
 - **加表情**：图片丢进 `stickers\`，文件名带关键词（如 `可爱_猫猫.gif`）可被 `/sticker 可爱` 命中。
 - **改群规/态度/称呼**：编辑 `%DSH_HOME%\AGENTS.md`，保存即生效（IM 会话每次重建提示词时读取）。
 - **调推理上限**：主人在群里 `/effort low|medium|high`（仅主人）。
+
+### 1.1 私聊 / 群聊开关与全局暂停（都不需要重启）
+
+- 点击：桌面 `IM开关.url` 或 <http://127.0.0.1:17863/> → 「私聊」「群聊」两个开关；关掉的一侧完全静默（不回复、不建会话）。
+- **两个都关 = 机器人真正离线**（插件断开 QQ/微信连接，DSH 工作区显示离线）；打开任意一侧 5 秒内自动重连。
+- 命令行（与页面写同一文件）：
+  ```powershell
+  node tools/im-patch/im-switch.mjs status
+  node tools/im-patch/im-switch.mjs direct on|off
+  node tools/im-patch/im-switch.mjs group on|off
+  node tools/im-patch/im-switch.mjs all on|off
+  ```
+- 全局暂停（彻底停所有通道 + 停语音 sidecar，页面此时不生效）：
+  ```powershell
+  node tools/im-patch/im-pause.mjs on|off|status
+  ```
+- 排障：开关状态在 `switches.json`，暂停在 `paused`；页面打不开先确认 DSH 是否在运行、17863 是否被占用（`DSH_IM_SWITCH_PORT` 可改端口）。
 
 ## 2. 插件升级后如何重打补丁（最常见）
 
