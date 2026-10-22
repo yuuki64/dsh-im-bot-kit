@@ -25,6 +25,7 @@
   - 私聊/群聊开关：<http://127.0.0.1:17863/>（桌面 `IM开关.url`）；命令行 `node im-switch.mjs status | direct on|off | group on|off | all on|off`；
   - 全局暂停：`node im-pause.mjs on|off|status`；
   - 当前状态以 `switches.json` / `paused` 文件为准，用 `node im-switch.mjs status` 一条命令看清。
+- **会话为什么显示在「未分组」**：`<DSH_HOME>\im` 是 bot-workspace 的 junction，插件曾因此把新会话建成裸 cwd、不进工作区注册表；第 15 轮已修，见第 15 节。
 
 ## 0. 一句话恢复
 
@@ -73,7 +74,7 @@ node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
 
 效果：私聊里发 `/voice 你好呀` 会直接收到一条 QQ 语音；模型如果通过文件工具产出了 `.wav`，投递时也会自动转成语音（转不了就按文件发，不会丢）。
 
-微信：**平台侧没有发送语音的接口**（iLink 只有文本/图片/文件；收到的语音会带转写文本），所以微信这边没做，也做不了。
+微信：**平台侧没有发送语音的接口**（iLink 只有文本/图片/文件；收到的语音会带转写文本），所以微信这边没做，也做不了。补丁（2026-10-22）：`weixin-bridge.mjs` 新增 `sanitizeOutboundText()`，出站前把 `<dsh_im_voice>…</dsh_im_voice>` 剥成普通文本、把 `<dsh_im_sticker>` 整段丢弃（微信没有表情包投递路径），标签不会再原样漏给用户。
 
 ---
 
@@ -415,3 +416,42 @@ node test-im-switch.mjs
 
 ### 14.6 apply.mjs 同步
 `FILES` 现已支持第二基线目录（`plugin-src/host`），并新增 4 个条目：`im-switch.mjs`、`im-switch-server.mjs`、`inbound-access.mjs`、`plugin-src/host/channels/shared/startup.mjs`（最后这个此前只存在于 `backup/src-patched`，`apply.mjs` 没收录，重装插件后会漏掉暂停功能 —— 本轮一并补上）。
+
+---
+
+## 15. 会话进「未分组」的修复（2026-10-22 深夜）
+
+### 15.1 现象
+IM 新会话在 DSH 侧栏落到「未分组」，而不是配置的 `bot-workspace` 工作区；`bot-workspace` 分组里只剩早期建的 QQ 会话，微信会话一条都不在里面。
+
+### 15.2 根因（实盘数据已核对）
+- `<DSH_HOME>\im` 是 junction → `<BOT_WORKSPACE>`（维护手册第 0 节记的就是这个设计）。
+- 插件 `default-workspace.mjs` 把 `<DSH_HOME>\im` 当“未分组默认 IM 工作区”，而 `sameWorkspacePath()` 比的是 **realpath**，于是 **bot-workspace 被判成 ungrouped**（实测 `sameWorkspacePath('D:\...\bot-workspace', 'C:\Users\<你>\.dsh\im') === true`）。
+- `harness-client.mjs` 的 `createSession()` 在 ungrouped 时只传 `{ cwd }`、不传 `workspaceId`。DSH 侧栏按**工作区注册表**（`<DSH_HOME>\storages\workspace.json` 里各 workspace 的 `sessionIds`）分组，没进注册表的会话就显示在「未分组」。
+- 时间线对得上：junction 建于 14:04:17；之前建的会话（`session-f30da7e5` 13:47 等）带 workspaceId、留在 bot-workspace；之后的（QQ 群 `dfbf8a51` 14:24、QQ 私聊 `8158deef` 21:48、微信 `789b20fe` 22:04）都是裸 cwd，全进未分组。**“只有 QQ”是假象**：留下来在 bot-workspace 的恰好都是 junction 之前建的 QQ 老会话。
+
+### 15.3 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/channels/shared/harness-client.mjs`（本轮纳入补丁集） | 新增 `registeredWorkspaceId()`（按 realpath 匹配 Host 已注册的工作区）和 `createWorkspaceId()`；`createSession()` 改为：命中已注册工作区 → 传 `workspaceId`；未注册且是未分组默认目录 → 传 `cwd`（旧行为）；其余 → `workspace.create` 后传新 id。`workspaceId()` 复用 `registeredWorkspaceId()`，不再用字符串相等比较。 |
+| `apply.mjs` | `FILES` 增加 `harness-client.mjs`；bundle 标记增加 `registeredWorkspaceId`。 |
+| `test-workspace-grouping.mjs`（新增） | 6 条离线断言，见 15.4。 |
+
+### 15.4 验证（已跑，2026-10-22）
+- `node apply.mjs` → 重打包 `lib/index.js`（约 9.1 MB，标记齐全）。
+- `node test-workspace-grouping.mjs` → **6/6 passed**：junction 别名→workspaceId、从 junction 路径一侧 canonical 匹配、未注册未分组→cwd、非未分组→`workspace.create`、`workspace.list` 报错回退 cwd、`workspaceId()` 复用注册不重复建。
+- 用 Node 24 runtime（`<DSH_HOME>\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe`）import 产物 → 导出 `apply/createImHostPlugin/inject/name` 正常（系统 Node 21 缺 `node:sqlite`，bundle 本身要 Node 22+ 才能 import）。
+- **生效仍需完全退出 DSH 再打开**；重启后新 IM 会话应直接出现在 bot-workspace 分组。
+
+### 15.5 已有的未分组会话（本轮决定不迁移）
+2026-10-22 选择先不动历史会话。以后想归位，三条路：
+- IM 里 `/session <Session ID>`：走 adopt 路径；但 adopt 的“无归属”兜底目前只接受 cwd == 未分组目录，未注册会话会报 `session-not-registered`，**要再给 `harness-session-binding.mjs` 补一条路径匹配才可用**（约 10 行）。
+- IM 里 `/new`：新建会话会正确进 bot-workspace，历史留在未分组。
+- 关 DSH 后手工把 session id 加进 `workspace.json` 里 bot-workspace 的 `sessionIds`（先备份）。
+
+### 15.6 回滚
+1. 把 `backup/src-patched/src_channels_shared_harness-client.mjs` 换回 `pristine/package/src/channels/shared/harness-client.mjs`（原版）；
+2. 从 `apply.mjs` 的 `FILES` 删掉 `src_channels_shared_harness-client.mjs` 那行，标记数组里删掉 `registeredWorkspaceId`；
+3. `node apply.mjs`（重打包）+ 重启 DSH。
+只想回滚运行时也可以直接拷 `backup/pre-apply-<时间戳>/src_channels_shared_harness-client.mjs` 回插件 `src/` 再重打包。

@@ -43,6 +43,7 @@ const FILES = [
   ['src_channels_shared_busy-message-dispatcher.mjs', 'channels/shared/busy-message-dispatcher.mjs'],
   ['src_channels_shared_sticker-library.mjs', 'channels/shared/sticker-library.mjs'],
   ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],
+  ['src_channels_shared_harness-client.mjs', 'channels/shared/harness-client.mjs'],
   ['src_channels_shared_group-reasoning.mjs', 'channels/shared/group-reasoning.mjs'],
   ['src_channels_shared_im-switch.mjs', 'channels/shared/im-switch.mjs'],
   ['src_channels_shared_im-switch-server.mjs', 'channels/shared/im-switch-server.mjs'],
@@ -130,6 +131,7 @@ const markers = [
   'chat-switch-off',
   'switch page ready',
   '/api/state',
+  'registeredWorkspaceId',
 ];
 const absent = markers.filter((marker) => !lib.includes(marker));
 if (absent.length) fail(`打包结果缺少标记：${absent.join(', ')}`);

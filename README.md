@@ -28,6 +28,7 @@ tools/im-patch/          插件补丁集
   im-pause.mjs           全局暂停/恢复 IM（paused 标记，断开所有通道）
   im-switch.mjs          私聊/群聊双开关命令行（和点击页面共用 switches.json）
   test-im-switch.mjs     双开关离线自测
+  test-workspace-grouping.mjs 会话工作区归属离线自测（第 15 轮：修「未分组」）
   import-qq-stickers.mjs 把 QQ 收藏表情导入本地表情库
   README.md              每一轮补丁改了什么（按时间线）+ 接手速查
   package.json/.npmrc    重新打包用的依赖清单和镜像源
