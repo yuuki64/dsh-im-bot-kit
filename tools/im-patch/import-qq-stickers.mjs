@@ -15,11 +15,16 @@ import { basename, join } from 'node:path';
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh');
 const LIBRARY = process.env.DSH_STICKER_DIR ?? join(DSH_HOME, 'integrations', 'dsh-im', 'stickers');
-const DEFAULT_QQ_USER = 'D:/yuuki/qq/Tencent Files/1285567817';
+const DEFAULT_QQ_USER = process.env.DSH_QQ_USER_DIR ?? '';
 
 const args = process.argv.slice(2);
 const qqIndex = args.indexOf('--qq-dir');
-const QQ_USER = qqIndex >= 0 ? args[qqIndex + 1] : process.env.DSH_QQ_USER_DIR ?? DEFAULT_QQ_USER;
+const QQ_USER = qqIndex >= 0 ? args[qqIndex + 1] : DEFAULT_QQ_USER;
+if (!QQ_USER) {
+  console.error('缺少 QQ 数据目录。用法：node import-qq-stickers.mjs --qq-dir "<Tencent Files>/<QQ号>"');
+  console.error('或设置环境变量 DSH_QQ_USER_DIR。');
+  process.exit(2);
+}
 
 const IMAGE_EXTENSIONS = new Set(['.gif', '.png', '.webp', '.jpg', '.jpeg']);
 const MAX_BYTES = 3 * 1024 * 1024;

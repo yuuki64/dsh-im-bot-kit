@@ -7,11 +7,11 @@
 
 | 东西 | 位置 |
 | --- | --- |
-| 已安装插件 | `C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im` |
+| 已安装插件 | `<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im` |
 | 插件 bundle | `<插件>\lib\index.js`（改动必须重建） |
 | 补丁源文件 | `tools\im-patch\backup\src-patched\` |
-| DSH 主目录 | `C:\Users\yuuki\.dsh`（junction → `D:\project for deepseekharness\dsh-home`） |
-| 机器人工作区 | `C:\Users\yuuki\.dsh\im`（junction → `D:\project for deepseekharness\bot-workspace`） |
+| DSH 主目录 | `<DSH_HOME>`（junction → `<DSH_HOME_DATA>`） |
+| 机器人工作区 | `<DSH_HOME>\im`（junction → `<BOT_WORKSPACE>`） |
 | 音色配置 | `%DSH_HOME%\integrations\dsh-im\voice.json` |
 | 表情库配置 | `%DSH_HOME%\integrations\dsh-im\stickers.json` |
 | 表情图片库 | `%DSH_HOME%\integrations\dsh-im\stickers\` |
@@ -22,7 +22,7 @@
 | 私聊/群聊开关 | `%DSH_HOME%\integrations\dsh-im\switches.json`（`true`=开） |
 | 开关点击页 | `http://127.0.0.1:17863/`（插件启动时自带，桌面 `IM开关.url`） |
 | 全局暂停标记 | `%DSH_HOME%\integrations\dsh-im\paused`（存在=全部通道离线） |
-| 语音服务日志 | `D:\tools\gpt-sovits\server.out.log` / `D:\tools\tts-gpu\server.out.log` |
+| 语音服务日志 | `<TOOLS>\gpt-sovits\server.out.log` / `<TOOLS>\tts-gpu\server.out.log` |
 | 会话日志 | `%DSH_HOME%\sessions\<workspace>\<session>\session.v4.jsonl.zstd` |
 
 ## 1. 日常维护（不需要重启）
@@ -88,10 +88,10 @@ Select-String -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@xmanru
 
 ```powershell
 # GPT-SoVITS（17862）
-D:\tools\gpt-sovits\venv\Scripts\python.exe D:\tools\gpt-sovits\server.py --port 17862 --preload
+<TOOLS>\gpt-sovits\venv\Scripts\python.exe <TOOLS>\gpt-sovits\server.py --port 17862 --preload
 
 # F5-TTS（17861）
-D:\tools\Python311\python.exe D:\tools\tts-gpu\server.py --port 17861 --preload
+<TOOLS>\Python311\python.exe <TOOLS>\tts-gpu\server.py --port 17861 --preload
 
 # 关闭
 Invoke-RestMethod -Method Post http://127.0.0.1:17862/shutdown
@@ -109,7 +109,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17862/shutdown
 
 ### 3.3 重新微调（可选）
 
-GPT-SoVITS 微调产物：`D:\tools\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推理配置 `tts_infer_finetuned.yaml`。
+GPT-SoVITS 微调产物：`<TOOLS>\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推理配置 `tts_infer_finetuned.yaml`。
 重训大致流程（细节见 `tools/voice/gpt-sovits/README` 或上游文档）：
 
 1. 数据放 `dataset\wav32k` + `dafeiyu.list`
@@ -133,7 +133,7 @@ GPT-SoVITS 微调产物：`D:\tools\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推
 `stickers.json`
 
 ```json
-{ "version": 1, "dirs": ["C:/Users/yuuki/.dsh/integrations/dsh-im/stickers", "D:/yuuki/qq/Tencent Files/<QQ号>/nt_qq/nt_data/Emoji/emoji-related/emoji"], "maxBytes": 3145728 }
+{ "version": 1, "dirs": ["<DSH_HOME>/integrations/dsh-im/stickers", "<QQ_DATA>/Tencent Files/<QQ号>/nt_qq/nt_data/Emoji/emoji-related/emoji"], "maxBytes": 3145728 }
 ```
 
 ## 5. 群聊行为速查
@@ -147,7 +147,7 @@ GPT-SoVITS 微调产物：`D:\tools\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推
 
 ## 6. 日志与排错
 
-- 语音服务：`D:\tools\gpt-sovits\server.out.log`、`server.err.log`
+- 语音服务：`<TOOLS>\gpt-sovits\server.out.log`、`server.err.log`
 - 插件失败诊断：`%DSH_HOME%\logs\dsh-im\YYYY-MM-DD.log`（没有该目录说明没触发过失败记录）
 - QQ 消息归档：`group-history.sqlite` 的 `messages` 表（能确认消息是否真的推到了机器人）
 - 会话内容：`sessions\...\session.v4.jsonl.zstd`（zstd 多帧，按 `28 b5 2f fd` 切帧解码）
@@ -157,7 +157,7 @@ GPT-SoVITS 微调产物：`D:\tools\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推
 - 每次大改动前：`git add -A && git commit`（本仓库），另外可复制 `backup/src-patched`。
 - 插件回滚：`npm i @xmanrui/dsh-im@<旧版本>` 后重新运行 `scripts/rebuild.ps1`。
 - DSH 回滚：安装旧版 DSH，再按第 2 节重打补丁。
-- 语音权重/模型：`D:\tools\gpt-sovits\` 与 `D:\tools\tts-gpu\` 不在仓库里，建议单独备份到移动硬盘。
+- 语音权重/模型：`<TOOLS>\gpt-sovits\` 与 `<TOOLS>\tts-gpu\` 不在仓库里，建议单独备份到移动硬盘。
 
 ## 7.1 一键备份
 

@@ -14,7 +14,9 @@ const MAX_FILES = 6000;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
-const QQ_EMOJI_ROOT = 'D:/yuuki/qq/Tencent Files/1285567817/nt_qq/nt_data/Emoji';
+// Optional: local QQ "collected stickers" cache root (…/nt_qq/nt_data/Emoji).
+// Set DSH_IM_QQ_EMOJI_ROOT, or list explicit dirs in stickers.json instead.
+const QQ_EMOJI_ROOT = (process.env.DSH_IM_QQ_EMOJI_ROOT ?? '').replace(/[\\/]+$/, '');
 
 export function stickerConfigPath() {
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
@@ -23,11 +25,9 @@ export function stickerConfigPath() {
 
 export function defaultStickerDirs() {
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
-  return [
-    join(home, 'integrations', 'dsh-im', 'stickers'),
-    join(QQ_EMOJI_ROOT, 'personal_emoji'),
-    join(QQ_EMOJI_ROOT, 'marketface'),
-  ];
+  const dirs = [join(home, 'integrations', 'dsh-im', 'stickers')];
+  if (QQ_EMOJI_ROOT) dirs.push(join(QQ_EMOJI_ROOT, 'personal_emoji'), join(QQ_EMOJI_ROOT, 'marketface'));
+  return dirs;
 }
 
 /** Read `stickers.json`; missing or malformed files fall back to defaults. */

@@ -6,17 +6,17 @@
 
 ```powershell
 # 1. Python 3.11（独立安装，不污染系统）
-#    下载 python-3.11.9-amd64.exe，静默安装到 D:\tools\Python311
+#    下载 python-3.11.9-amd64.exe，静默安装到 <TOOLS>\Python311
 
 # 2. 独立 venv
-D:\tools\Python311\python.exe -m venv D:\tools\gpt-sovits\venv
-$py = D:\tools\gpt-sovits\venv\Scripts\python.exe
+<TOOLS>\Python311\python.exe -m venv <TOOLS>\gpt-sovits\venv
+$py = <TOOLS>\gpt-sovits\venv\Scripts\python.exe
 
 # 3. torch CUDA（用本地 whl 或官方 index）
 $py -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # 4. 代码（GitHub 网页被墙时用 API zipball）
-#    https://api.github.com/repos/RVC-Boss/GPT-SoVITS/zipball -> 解压到 D:\tools\gpt-sovits\
+#    https://api.github.com/repos/RVC-Boss/GPT-SoVITS/zipball -> 解压到 <TOOLS>\gpt-sovits\
 #    目录名以 RVC-Boss-GPT-SoVITS-<hash> 开头
 
 # 5. 依赖（清华镜像）
@@ -31,15 +31,15 @@ $py -m pip install numpy<2 scipy librosa==0.10.2 numba pytorch-lightning ffmpeg-
 #    gsv-v2final-pretrained\{s1*.ckpt, s2G2333k.pth, s2D2333k.pth}
 #    fast_langdetect\{lid.176.bin,lid.176.ftz}、G2PWModel、nltk_data
 
-# 7. ffmpeg（imageio-ffmpeg 自带，复制成 D:\tools\bin\ffmpeg.exe 并加 PATH）
+# 7. ffmpeg（imageio-ffmpeg 自带，复制成 <TOOLS>\bin\ffmpeg.exe 并加 PATH）
 ```
 
 ## 启动
 
 ```powershell
-$py = D:\tools\gpt-sovits\venv\Scripts\python.exe
-$env:PATH = "D:\tools\bin;$env:PATH"
-$py D:\tools\gpt-sovits\server.py --port 17862 --preload
+$py = <TOOLS>\gpt-sovits\venv\Scripts\python.exe
+$env:PATH = "<TOOLS>\bin;$env:PATH"
+$py <TOOLS>\gpt-sovits\server.py --port 17862 --preload
 ```
 
 `--preload` 会先加载模型再监听；不预加载则首个请求多等约 30 秒。

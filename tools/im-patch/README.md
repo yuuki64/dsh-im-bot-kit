@@ -8,7 +8,7 @@
 > `bot-session-im-patches`（原 `bot-workspace\im-patches\`，2026-10-22 已归档到 `reference/`）那套只改 `src/`、不重新打包，**单独使用不会生效**，已由本目录的
 > `apply.mjs` 取代（保留作历史参考）。
 
-对象：`@xmanrui/dsh-im` 5.2.0（安装位置 `C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im`）
+对象：`@xmanrui/dsh-im` 5.2.0（安装位置 `<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im`）
 补丁日期：2026-10-22
 状态：**代码已改、已重新打包、已离线自测**；生效需要重启 DSH（插件在启动时加载 `lib/index.js`）。
 
@@ -16,10 +16,11 @@
 
 - **权威文件（最新，先读这两个）**：
   1. 本文件 —— 补丁集每一轮改了什么、怎么恢复、怎么排查；
-  2. `C:\Users\yuuki\.dsh\AGENTS.md` 里的「IM 机器双开关」和「群聊与第三方请求边界」章节 —— 行为规则（人设、权限、语音/表情规则都在这）。
-- **代码 vs 运行数据**：代码在本目录 + 已安装插件；运行数据在 `C:\Users\yuuki\.dsh\integrations\dsh-im\`（`switches.json` / `paused` / `voice.json` / `persona.md` / `group-history.sqlite` / `stickers.json`），QQ 凭据与工作区映射在 `integrations\dsh-qq\`。
-- **插件安装位置**：`C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im`；运行的是 `lib\index.js`，改了 `src/` 或 `plugin-src/` 必须重新打包并重启 DSH。
-- **开源镜像**：`D:\project for deepseekharness\default-workspace\im-bot-kit`（= <https://github.com/yuuki64/dsh-im-bot-kit>），是本目录 + 语音服务 + 配置 + 维护手册的副本。**镜像可能落后于本目录，排障一律以本目录和实际安装的插件为准**；镜像由 `im-bot-kit` 仓库单独提交/推送。
+  2. `<DSH_HOME>\AGENTS.md` 里的「IM 机器双开关」和「群聊与第三方请求边界」章节 —— 行为规则（人设、权限、语音/表情规则都在这）。
+- **代码 vs 运行数据**：代码在本目录 + 已安装插件；运行数据在 `<DSH_HOME>\integrations\dsh-im\`（`switches.json` / `paused` / `voice.json` / `persona.md` / `group-history.sqlite` / `stickers.json`），QQ 凭据与工作区映射在 `integrations\dsh-qq\`。
+- **插件安装位置**：`<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im`；运行的是 `lib\index.js`，改了 `src/` 或 `plugin-src/` 必须重新打包并重启 DSH。
+- **开源镜像**：`<WORKSPACE>\im-bot-kit`（= <https://github.com/yuuki64/dsh-im-bot-kit>），是本目录 + 语音服务 + 配置 + 维护手册的副本。**镜像可能落后于本目录，排障一律以本目录和实际安装的插件为准**；镜像由 `im-bot-kit` 仓库单独提交/推送。
+- **路径占位符**：文中 `<DSH_HOME>`（= `C:\Users\<你>\.dsh`）、`<WORKSPACE>`、`<BOT_WORKSPACE>`、`<TOOLS>`（语音/模型安装目录，如 `D:\tools`）、`<QQ_DATA>`（QQ 数据目录）、`<DSH_HOME_DATA>`、`<DESKTOP>` 都是占位符，按自己机器的实际路径替换。
 - **日常操作**：
   - 私聊/群聊开关：<http://127.0.0.1:17863/>（桌面 `IM开关.url`）；命令行 `node im-switch.mjs status | direct on|off | group on|off | all on|off`；
   - 全局暂停：`node im-pause.mjs on|off|status`；
@@ -30,7 +31,7 @@
 插件重装/升级后补丁被冲掉时：
 
 ```powershell
-cd "D:\project for deepseekharness\default-workspace\tools\im-patch"
+cd "<WORKSPACE>\tools\im-patch"
 node apply.mjs --check   # 先看缺什么
 node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
 ```
@@ -79,7 +80,7 @@ node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
 ## 2. 依赖变化
 
 - `silk-wasm@3.7.1` 直接放进了插件自己的 `node_modules`：
-  `C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im\node_modules\silk-wasm`
+  `<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im\node_modules\silk-wasm`
   （插件 profile 由 pnpm 管理，下次重装插件时这个目录可能被删掉，删了语音就会提示"缺少 SILK 编码器"）
 - 构建用的 esbuild/依赖只在本目录 `node_modules`，不污染 profile。
 
@@ -88,7 +89,7 @@ node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
 ## 3. 重新打包
 
 ```powershell
-cd "D:\project for deepseekharness\default-workspace\tools\im-patch"
+cd "<WORKSPACE>\tools\im-patch"
 node build-im.mjs
 ```
 
@@ -126,12 +127,12 @@ node -e "await import('file:///.../dsh-im/lib/index.js')"   # Node 22 下导出 
 
 ```powershell
 # 只回滚运行时代码（最常用）
-Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\backup\lib-index.js.orig" `
-  "C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im\lib\index.js" -Force
+Copy-Item "<WORKSPACE>\tools\im-patch\backup\lib-index.js.orig" `
+  "<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im\lib\index.js" -Force
 
 # 连源码一起回滚
-Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\pristine\package\src\*" `
-  "C:\Users\yuuki\.dsh\profiles\desktop\node_modules\@xmanrui\dsh-im\src\" -Recurse -Force
+Copy-Item "<WORKSPACE>\tools\im-patch\pristine\package\src\*" `
+  "<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im\src\" -Recurse -Force
 ```
 
 回滚后同样要重启 DSH。
@@ -152,7 +153,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 
 ## 6. 与另一个会话补丁包的关系（2026-10-22 审计）
 
-`reference/bot-session-im-patches/`（原 `D:\project for deepseekharness\bot-workspace\im-patches\`，2026-10-22 归档）是另一个会话（QQ 私聊）做的引用图补丁，结论：
+`reference/bot-session-im-patches/`（原 `<BOT_WORKSPACE>\im-patches\`，2026-10-22 归档）是另一个会话（QQ 私聊）做的引用图补丁，结论：
 
 | 项 | 状态 |
 | --- | --- |
@@ -172,7 +173,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ### 7.1 QQ 语音音色可换
 - TTS 改成优先走 WinRT OneCore（`Windows.Media.SpeechSynthesis`），可用音色：**Yaoyao（zh-CN 少女音，默认）**、Huihui、Kangkang、Ayumi/Haruka/Ichiro（日语）、Zira（英语，仅 SAPI）。默认 pitch +15%，比原来的 Huihui 更年轻。
 - 指令（仅主人）：`/voice list`、`/voice set yaoyao`、`/voice pitch +15`、`/voice rate +5`、`/voice reset`、`/voice test`、`/voice 要说的话`。
-- 设置持久化到 `C:\Users\yuuki\.dsh\integrations\dsh-im\voice.json`。
+- 设置持久化到 `<DSH_HOME>\integrations\dsh-im\voice.json`。
 - 实现文件：`shared/voice-synth.mjs`（重写）。SAPI 仍作后备。Edge TTS（在线神经音色）本机 403 连不上，未采用。
 
 ### 7.2 引用里的文件也能读
@@ -188,7 +189,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 - 生效范围：**之后创建/重建的会话**；已存在的群会话要 `/new` 或换新会话才吃到新上限。
 
 ### 7.4 其他
-- `qq-bridge.mjs` 失败时会往 `C:\Users\yuuki\.dsh\logs\dsh-im\YYYY-MM-DD.log` 追加一行 JSON 诊断（含 referenceId、错误码、message、stage），用于追查 `INTERNAL_UNKNOWN` 这类只有参考号的错误。
+- `qq-bridge.mjs` 失败时会往 `<DSH_HOME>\logs\dsh-im\YYYY-MM-DD.log` 追加一行 JSON 诊断（含 referenceId、错误码、message、stage），用于追查 `INTERNAL_UNKNOWN` 这类只有参考号的错误。
 - 本目录 `apply.mjs` 的文件清单已同步到 13 个文件（新增 `bot-workspace-store.mjs`、`group-reasoning.mjs`、`kokoro-tts.mjs`）。
 - 仍需要重启 DSH 才会加载新 bundle。
 
@@ -198,7 +199,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 
 ### 8.1 音色换成本地 Kokoro-82M（二次元女声）
 - 选型：**Kokoro-82M**（GitHub 2025-2026 最火的开源轻量 TTS 之一，82M 参数、MIT 系许可），中文音色 `zf_xiaobei / zf_xiaoni / zf_xiaoxiao / zf_xiaoyi`（少女音）。通过 `sherpa-onnx-node` 在 Node 进程内跑 ONNX，**不需要 Python、不需要服务器、离线**。
-- 模型/运行时放在 `C:\Users\yuuki\.dsh\integrations\dsh-im\tts\`（约 400 MB：`kokoro-multi-lang-v1_0` fp32 模型 + espeak 数据 + `node_modules/sherpa-onnx-node`）。
+- 模型/运行时放在 `<DSH_HOME>\integrations\dsh-im\tts\`（约 400 MB：`kokoro-multi-lang-v1_0` fp32 模型 + espeak 数据 + `node_modules/sherpa-onnx-node`）。
 - 实测延迟（i7-13650HX，8 线程 fp32）：RTF ≈ 0.33；3 秒语音约 1.1 s 出 SILK（进程首次调用多 ~1.5 s 加载模型）。int8 在这台机器上反而更慢（RTF 1.1），已弃用。
 - 兜底链：Kokoro → WinRT OneCore（Yaoyao/Huihui/日语）→ SAPI；Kokoro 不可用时自动降级，不影响发语音。
 - 指令：`/voice list`、`/voice set xiaobei|xiaoni|xiaoxiao|xiaoyi`（也支持 yaoyao/huihui/…）、`/voice speed 1.1`（仅 Kokoro）、`/voice test`、`/voice reset`。
@@ -222,11 +223,11 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ### 9.1 表情库
 - 新增 `shared/sticker-library.mjs`：扫描并缓存可用表情图片（gif/png/jpg/webp/bmp，≤8 MB）。
 - 默认三个来源（只读，不复制、不改动 QQ 文件）：
-  1. `C:/Users/yuuki/.dsh/integrations/dsh-im/stickers`（自己往里丢图就能用）
-  2. QQ 收藏表情：`D:/yuuki/qq/Tencent Files/1285567817/nt_qq/nt_data/Emoji/personal_emoji`（含 Ori 原图与 Thumb 缩略图）
+  1. `<DSH_HOME>/integrations/dsh-im/stickers`（自己往里丢图就能用）
+  2. QQ 收藏表情：`<QQ_DATA>/Tencent Files/<QQ号>/nt_qq/nt_data/Emoji/personal_emoji`（含 Ori 原图与 Thumb 缩略图）
   3. QQ 商城表情缓存：`.../Emoji/marketface`
 - 实测扫描出 **4884** 张（jpg 2351 / png 2497 / gif 36），首次扫描约 0.9 s，缓存 10 分钟。
-- 配置：`C:/Users/yuuki/.dsh/integrations/dsh-im/stickers.json`（可改 dirs / maxBytes）。
+- 配置：`<DSH_HOME>/integrations/dsh-im/stickers.json`（可改 dirs / maxBytes）。
 
 ### 9.2 发表情的方式
 - 自然语言：模型输出 `<dsh_im_sticker>关键词</dsh_im_sticker>`，插件解析后从库里挑一张（有关键词按文件名匹配，没有就随机，近期不重复），用 `bot.sendImage` 发出；标签不展示给用户。群里/私聊任何发送者都能要求。
@@ -245,12 +246,12 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ### 10.1 装了什么
 | 组件 | 位置 | 说明 |
 | --- | --- | --- |
-| Python 3.11.9 | `D:\tools\Python311` | 独立安装，不污染系统 |
+| Python 3.11.9 | `<TOOLS>\Python311` | 独立安装，不污染系统 |
 | PyTorch 2.6.0+cu124 / torchaudio | 同上 site-packages | 2.4 GB 轮子从南大镜像分块下载后本地安装；`torch.cuda.is_available()=True`（RTX 4060 Laptop） |
 | f5-tts 1.1.22 + 依赖 | 同上 | 官方 PyPI 包（清华镜像） |
-| F5-TTS v1 Base 模型 | `D:\tools\tts-gpu\models\F5TTS_v1_Base` | 1.29 GB，从 hf-mirror 下载 |
-| 服务端 | `D:\tools\tts-gpu\server.py` | 本地 17861，模型常驻显存，`POST /tts` 返回 WAV |
-| 角色参考 | `D:\tools\tts-gpu\characters\<名字>.wav` + `<名字>.txt` | `default` 为占位（Kokoro 克隆）；换成角色素材即可 |
+| F5-TTS v1 Base 模型 | `<TOOLS>\tts-gpu\models\F5TTS_v1_Base` | 1.29 GB，从 hf-mirror 下载 |
+| 服务端 | `<TOOLS>\tts-gpu\server.py` | 本地 17861，模型常驻显存，`POST /tts` 返回 WAV |
+| 角色参考 | `<TOOLS>\tts-gpu\characters\<名字>.wav` + `<名字>.txt` | `default` 为占位（Kokoro 克隆）；换成角色素材即可 |
 
 ### 10.2 实测延迟（RTX 4060 Laptop 8G）
 - 模型加载（冷启动，进程内一次）：约 30 s（插件会自动拉起 sidecar，第一次发语音会等这一下）
@@ -266,7 +267,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ### 10.4 怎么换成“某个角色”
 1. 找一个 5–15 秒、干净、只有该角色人声的片段（wav/mp3）
 2. 写下这段音频的原话
-3. 保存为 `D:\tools\tts-gpu\characters\<名字>.wav` 和同名 `.txt`
+3. 保存为 `<TOOLS>\tts-gpu\characters\<名字>.wav` 和同名 `.txt`
 4. QQ 里 `/voice char <名字>` → `/voice test`
 
 ### 10.5 许可与边界（重要）
@@ -278,9 +279,9 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 
 - 数据源：ModelScope `YinZilu/da-fei-yu-girl-voice-zh`（CC-BY-NC 4.0，56 条 / 9 分 53 秒，B 站 UP 主尹紫鹭幻想社自调少女音色）。
 - 取了第 1 条（13.9 s，44100 Hz mp3）→ 用 `soundfile + torchaudio` 转成 24 kHz 单声道 WAV，转录文本取自 `metadata.csv`：
-  - `D:\tools\tts-gpu\characters\dafeiyu.wav`（13.9 s）
-  - `D:\tools\tts-gpu\characters\dafeiyu.txt`
-- 默认音色已切到 `f5 / dafeiyu`（`C:\Users\yuuki\.dsh\integrations\dsh-im\voice.json`）。
+  - `<TOOLS>\tts-gpu\characters\dafeiyu.wav`（13.9 s）
+  - `<TOOLS>\tts-gpu\characters\dafeiyu.txt`
+- 默认音色已切到 `f5 / dafeiyu`（`<DSH_HOME>\integrations\dsh-im\voice.json`）。
 - 实测（RTX 4060，热推理）：16 步 **0.81 s**，8 步 **0.36 s**；语音服务冷启动 ~30 s（模型加载）。
 - 切换：`/voice char dafeiyu`；回 Kokoro：`/voice set xiaobei`；回 Windows 音色：`/voice set yaoyao`。
 
@@ -300,9 +301,9 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ## 11. GPT-SoVITS 微调音色（2026-10-22 晚，主力音色）
 
 ### 11.1 装了什么
-- 代码：GitHub API zipball 下载（GitHub 网页/Release 被墙，`api.github.com/repos/.../zipball` 可用）→ `D:\tools\gpt-sovits\RVC-Boss-GPT-SoVITS-b4570b8`
-- 环境：独立 venv `D:\tools\gpt-sovits\venv`（Python 3.11 + torch 2.6.0+cu124 + transformers 4.57 + gradio 4 + tensorboard + funasr 等）
-  - 补丁：`jieba_fast`→`jieba`（3 个文件）；ffmpeg 用 `imageio-ffmpeg` 提供的二进制复制到 `D:\tools\bin\ffmpeg.exe`
+- 代码：GitHub API zipball 下载（GitHub 网页/Release 被墙，`api.github.com/repos/.../zipball` 可用）→ `<TOOLS>\gpt-sovits\RVC-Boss-GPT-SoVITS-b4570b8`
+- 环境：独立 venv `<TOOLS>\gpt-sovits\venv`（Python 3.11 + torch 2.6.0+cu124 + transformers 4.57 + gradio 4 + tensorboard + funasr 等）
+  - 补丁：`jieba_fast`→`jieba`（3 个文件）；ffmpeg 用 `imageio-ffmpeg` 提供的二进制复制到 `<TOOLS>\bin\ffmpeg.exe`
 - 预训练权重（hf-mirror `lj1995/GPT-SoVITS` + `XXXXRT/GPT-SoVITS-Pretrained`）：
   - `chinese-hubert-base` 180MB、`chinese-roberta-wwm-ext-large` 621MB
   - `gsv-v2final-pretrained`：s1 148MB、s2G 101MB、s2D 89MB
@@ -314,8 +315,8 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 - 微调：s2（SoVITS）在 4060 上训练；8 epoch 的最终权重落在 `logs\dafeiyu\logs_s2_v2\G_233333333333.pth`（585MB），用 `process_ckpt.savee` 转成推理格式 `weights\dafeiyu_e4_s16.pth`（81MB，fp16）
 
 ### 11.2 推理服务
-- `D:\tools\gpt-sovits\server.py`，端口 **17862**，`POST /tts` 返回 WAV；默认读 `tts_infer_finetuned.yaml`（custom 块指向微调权重）
-- 启动：`D:\tools\gpt-sovits\venv\Scripts\python.exe server.py --port 17862 --preload`
+- `<TOOLS>\gpt-sovits\server.py`，端口 **17862**，`POST /tts` 返回 WAV；默认读 `tts_infer_finetuned.yaml`（custom 块指向微调权重）
+- 启动：`<TOOLS>\gpt-sovits\venv\Scripts\python.exe server.py --port 17862 --preload`
 - 参考音：`characters\dafeiyu.wav`（4.47s）+ `.txt`；换角色放同名文件即可
 
 ### 11.3 实测延迟（RTX 4060 Laptop）
@@ -344,7 +345,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 - `/voice speed 0.9` 也能调（Kokoro/F5 同样生效）。
 
 ### 12.2 人设提示词（参考 Derpyu520/qq-bridge 的 roles 机制）
-- 目录：`C:\Users\yuuki\.dsh\integrations\dsh-im\personas\`，一个角色一个 `.md`，文件名即角色名。
+- 目录：`<DSH_HOME>\integrations\dsh-im\personas\`，一个角色一个 `.md`，文件名即角色名。
 - 当前生效：`integrations/dsh-im\persona.md`（内容 == 某个 personas/*.md 的拷贝）
 - 注入方式：`shared/persona.mjs` 把 persona 追加到通道的 `sourceGuidance`，QQ 和微信 bridge 都改成了 `applyPersona(...)`；因此**所有 QQ/微信 bot 会话生效**，本机 DSH 会话不受影响。
 - 生效时机：改文件后**下一条消息即生效**，不用重启；persona 为空则完全不注入。
@@ -360,7 +361,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 ## 13. IM 总开关（暂停 / 恢复，2026-10-22）
 
 - 插件管理页没有“停用机器人”开关，QQ 卡片里的“移除接入”会删凭据，所以自建了暂停机制。
-- 标记文件：`C:\Users\yuuki\.dsh\integrations\dsh-im\paused`（存在 = 全部 IM 通道暂停）。
+- 标记文件：`<DSH_HOME>\integrations\dsh-im\paused`（存在 = 全部 IM 通道暂停）。
 - 命令（任意目录可跑，Node 22 路径见 `~/.dsh/dsh-runtimes`）：
   - `node tools/im-patch/im-pause.mjs on` → 暂停 IM + 停语音 sidecar
   - `node tools/im-patch/im-pause.mjs off` → 恢复 IM（语音按需拉起）
@@ -377,7 +378,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 
 | 层 | 文件 | 说明 |
 | --- | --- | --- |
-| 状态 | `C:\Users\yuuki\.dsh\integrations\dsh-im\switches.json` | `{"version":1,"direct":true,"group":true,"updatedAt":"..."}`；`true` = 正常回复，`false` = 该侧入站全部丢弃 |
+| 状态 | `<DSH_HOME>\integrations\dsh-im\switches.json` | `{"version":1,"direct":true,"group":true,"updatedAt":"..."}`；`true` = 正常回复，`false` = 该侧入站全部丢弃 |
 | 判定 | `src/channels/shared/im-switch.mjs`（新增） | 读写状态文件（mtime 缓存）、`chatSwitchDecision()`、`switchSnapshot()` |
 | 门禁 | `src/channels/shared/inbound-access.mjs`（改） | **在访问策略和主人豁免之前**先查开关，命中返回 `{allowed:false, reason:'chat-switch-off'}`；QQ/微信的拒绝分支对该 reason 是静默的（只 markSeen，不回复、不计数为回复） |
 | 页面/服务 | `src/channels/shared/im-switch-server.mjs`（新增） | 127.0.0.1:17863（`DSH_IM_SWITCH_PORT` 可改）的点击页面 + JSON API；插件启动时由 `startup.mjs` 拉起（幂等、失败不影响通道） |
@@ -389,7 +390,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 **两个都关 = 真正离线**（2026-10-22 21:42 补）：`startup.mjs` 的 5 秒轮询除了暂停标记也看开关文件，`isImPaused() || !anyChatEnabled()` 时关闭 production 连接；DSH 左侧工作区的“在线”徽标随 socket 变成离线。只要有一侧打开就保持连接、只按那一侧处理。这样“都关掉”在界面上也是诚实的离线状态。
 
 ### 14.2 怎么用
-- 桌面快捷方式 `IM开关.url`（`C:\Users\yuuki\OneDrive\桌面\IM开关.url`）→ 浏览器打开 `http://127.0.0.1:17863/`，页面上「私聊」「群聊」两个开关，点一下立即生效。
+- 桌面快捷方式 `IM开关.url`（`<DESKTOP>\IM开关.url`）→ 浏览器打开 `http://127.0.0.1:17863/`，页面上「私聊」「群聊」两个开关，点一下立即生效。
 - 页面轮询 4 秒同步外部改动；底部显示全局暂停状态（暂停时两侧开关不生效）。
 - 命令行等价：`node im-switch.mjs direct off` 等，写的是同一个文件，热生效。
 
@@ -399,7 +400,7 @@ Copy-Item "D:\project for deepseekharness\default-workspace\tools\im-patch\prist
 
 ### 14.4 自测（离线跑过，2026-10-22）
 ```powershell
-cd "D:\project for deepseekharness\default-workspace\tools\im-patch"
+cd "<WORKSPACE>\tools\im-patch"
 node test-im-switch.mjs
 ```
 覆盖：默认全开 / 写文件 / mtime 读取 / 共享门禁返回 `chat-switch-off` / 页面 200 / `/api/state` 读写 / 非 JSON 415 / 跨源 403 / 404。全部通过。
