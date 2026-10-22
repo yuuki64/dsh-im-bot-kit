@@ -17,7 +17,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const branch = process.argv[2] ?? 'main';
+const positional = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+const pushTags = process.argv.includes('--tags');
+const branch = positional[0] ?? 'main';
 const git = (args, env) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
 
 function readToken() {
@@ -94,6 +96,11 @@ try {
       const out = execFileSync('git', ['-C', repoRoot, 'push', 'origin', branch], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
       console.log('push ok');
       if (out.trim()) console.log(mask(out));
+      if (pushTags) {
+        const tagOut = execFileSync('git', ['-C', repoRoot, 'push', 'origin', '--tags'], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+        console.log('tags pushed');
+        if (tagOut.trim()) console.log(mask(tagOut));
+      }
       ok = true;
       break;
     } catch (err) {
