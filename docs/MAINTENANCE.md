@@ -152,6 +152,24 @@ GPT-SoVITS 微调产物：`<TOOLS>\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推�
 - QQ 消息归档：`group-history.sqlite` 的 `messages` 表（能确认消息是否真的推到了机器人）
 - 会话内容：`sessions\...\session.v4.jsonl.zstd`（zstd 多帧，按 `28 b5 2f fd` 切帧解码）
 
+### 6.1 IM 会话显示在「未分组」而不是 bot-workspace
+
+**原因**：`<DSH_HOME>\im` 是 `<BOT_WORKSPACE>` 的 junction，插件把 `<DSH_HOME>\im` 当“未分组默认 IM 工作区”，而路径比较走 realpath，于是 bot-workspace 也被判成 ungrouped；旧版 `createSession()` 在这种情况下只传 `cwd`，不传 `workspaceId`，DSH 侧栏按 `%DSH_HOME%\storages\workspace.json` 的工作区成员分组，裸 cwd 会话就落到「未分组」。
+
+**怎么确认**：
+
+```powershell
+# 1) junction 是否指向 bot 工作区（LinkType=Junction，Target=bot-workspace）
+Get-Item "$env:USERPROFILE\.dsh\im" | Select-Object LinkType,Target
+
+# 2) 某个会话是否在工作区成员里（把 session id 换成要查的）
+Select-String -Path "$env:USERPROFILE\.dsh\storages\workspace.json" -Pattern "session-xxxxxxxx" -SimpleMatch
+```
+
+**修复**：第 15 轮补丁（`tools/im-patch/README.md` 第 15 节）——`createSession()` 先查已注册工作区（realpath 匹配），命中就传 `workspaceId`。重跑 `scripts/rebuild.ps1`（或 `node tools/im-patch/apply.mjs`）并**完全退出 DSH 再打开**后，新会话直接进 bot-workspace。
+
+**已知限制**：修复前已经建成裸 cwd 的历史会话不会被自动迁移——它们仍留在「未分组」。要归位可选 `/new` 建新会话，或关掉 DSH 后手工把 session id 加进 `workspace.json` 的 bot-workspace `sessionIds`（务必先备份；`/session` 绑定需要再补 adopt 兼容才可用）。
+
 ## 7. 备份与回滚
 
 - 每次大改动前：`git add -A && git commit`（本仓库），另外可复制 `backup/src-patched`。
