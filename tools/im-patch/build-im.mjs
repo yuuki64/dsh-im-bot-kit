@@ -2,13 +2,16 @@
 // local patches (quoted-media cache + QQ voice). Uses the isolated esbuild in
 // this folder so the profile's pnpm tree stays untouched.
 import { mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const pluginRoot = 'C:/Users/yuuki/.dsh/profiles/desktop/node_modules/@xmanrui/dsh-im';
+const pluginRoot = process.env.DSH_PROFILE_DIR
+  ? resolve(process.env.DSH_PROFILE_DIR, 'node_modules', '@xmanrui', 'dsh-im')
+  : resolve(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'profiles', 'desktop', 'node_modules', '@xmanrui', 'dsh-im');
 const sourceDirectory = resolve(pluginRoot, 'plugin-src/host');
 const outputPath = resolve(pluginRoot, 'lib/index.js');
 const { larkSdkHandshakePatch } = await import(

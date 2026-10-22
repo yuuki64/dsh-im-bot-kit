@@ -8,6 +8,8 @@
 > 本仓库是「补丁 + 配套服务 + 配置 + 维护手册」，不包含 DSH 本体和第三方模型的二进制文件。
 > 插件原始代码（`@xmanrui/dsh-im`，MIT）的修改副本保留在 `tools/im-patch/backup/`，版权归原作者。
 
+> 文中 `<DSH_HOME>`（= `C:\Users\<你>\.dsh`）/ `<WORKSPACE>` / `<BOT_WORKSPACE>` / `<TOOLS>`（语音与模型目录，如 `D:\tools`）/ `<QQ_DATA>` / `<DESKTOP>` 为路径占位符，按本机实际路径替换。
+
 ## 目录
 
 ```text
@@ -35,10 +37,10 @@ scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
 
 ## 新对话怎么接手
 
-本仓库只是**镜像**，真正的权威副本在 `D:\project for deepseekharness\default-workspace\tools\im-patch`（以及实际安装的插件）。新开对话时让它按这个顺序读：
+本仓库只是**镜像**，真正的权威副本在 `<WORKSPACE>\tools\im-patch`（以及实际安装的插件）。新开对话时让它按这个顺序读：
 
 1. `tools/im-patch/README.md` 的「接手速查」+ 各轮补丁记录；
-2. `C:\Users\yuuki\.dsh\AGENTS.md` 的「IM 机器双开关」「群聊与第三方请求边界」章节；
+2. `<DSH_HOME>\AGENTS.md` 的「IM 机器双开关」「群聊与第三方请求边界」章节；
 3. 需要看当前开关状态就运行 `node tools/im-patch/im-switch.mjs status`（或打开 <http://127.0.0.1:17863/>）。
 
 GitHub 的这份仓库可以用来看改动历史和各版本源码，但**推送时机不一定跟本地同步**，排障以本地为准。
@@ -68,8 +70,8 @@ pwsh scripts/rebuild.ps1
 
 语音服务与模型：
 
-- GPT-SoVITS：`D:\tools\gpt-sovits\venv` + `D:\tools\gpt-sovits\server.py`（详见维护手册）
-- F5-TTS：`D:\tools\tts-gpu\server.py`
+- GPT-SoVITS：`<TOOLS>\gpt-sovits\venv` + `<TOOLS>\gpt-sovits\server.py`（详见维护手册）
+- F5-TTS：`<TOOLS>\tts-gpu\server.py`
 - 模型路径见各 `server.py` 顶部常量与环境变量
 
 ## 维护

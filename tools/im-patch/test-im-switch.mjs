@@ -6,7 +6,7 @@
 // shared inbound gate, starts the loopback switch page on a test port and
 // checks its API (including the "no cross-site form post" rules).
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -18,7 +18,7 @@ process.env.DSH_IM_SWITCH_PORT = port;
 
 const pluginRoot = process.env.DSH_PROFILE_DIR
   ? join(process.env.DSH_PROFILE_DIR, 'node_modules', '@xmanrui', 'dsh-im')
-  : 'C:/Users/yuuki/.dsh/profiles/desktop/node_modules/@xmanrui/dsh-im';
+  : join(homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', '@xmanrui', 'dsh-im');
 const src = (...parts) => pathToFileURL(resolve(pluginRoot, ...parts)).href;
 
 const failures = [];
