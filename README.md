@@ -2,8 +2,11 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai) 的 IM 插件（`@xmanrui/dsh-im`）改造成一个有**二次元微调音色、表情包、群聊接续、人设提示词**的 QQ / 微信机器人。
 
+> 仓库：https://github.com/yuuki64/dsh-im-bot-kit
+> 自有代码 MIT；第三方组件与素材见 [NOTICE.md](NOTICE.md)。
+
 > 本仓库是「补丁 + 配套服务 + 配置 + 维护手册」，不包含 DSH 本体和第三方模型的二进制文件。
-> 插件原始代码版权归其作者，本仓库只保存为了可维护而记录的修改副本；建议保持 Private。
+> 插件原始代码（`@xmanrui/dsh-im`，MIT）的修改副本保留在 `tools/im-patch/backup/`，版权归原作者。
 
 ## 目录
 
