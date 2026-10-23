@@ -77,10 +77,10 @@ function normalize(text) {
   return { text: text.replace(/\r\n/g, '\n'), hadCRLF };
 }
 
-function applyRedactions(text) {
+function applyRedactions(text, rules) {
   const applied = [];
   let output = text;
-  for (const rule of REDACTIONS) {
+  for (const rule of rules) {
     const next = output.replace(rule.pattern, rule.replacement);
     if (next !== output) applied.push(rule.reason);
     output = next;
@@ -119,7 +119,7 @@ async function listFiles(dir) {
  * 核心比较。文件清单显式传入，便于自测用临时目录；不读 git、不写文件。
  * @returns {{ok:boolean, rows:object[], counts:object}}
  */
-export async function runCheck({ authDir, mirrorDir, toolingFiles, patchFiles, strictEol = false }) {
+export async function runCheck({ authDir, mirrorDir, toolingFiles, patchFiles, strictEol = false, redactions = REDACTIONS }) {
   const rows = [];
   const compareOne = async (relPath) => {
     const authPath = join(authDir, relPath);
@@ -139,8 +139,8 @@ export async function runCheck({ authDir, mirrorDir, toolingFiles, patchFiles, s
     const mirrorRaw = await readFile(mirrorPath, 'utf8');
     const authNorm = normalize(authRaw);
     const mirrorNorm = normalize(mirrorRaw);
-    const auth = applyRedactions(authNorm.text);
-    const mirror = applyRedactions(mirrorNorm.text);
+    const auth = applyRedactions(authNorm.text, redactions);
+    const mirror = applyRedactions(mirrorNorm.text, redactions);
     if (auth.text === mirror.text) {
       const redacted = auth.applied.length > 0;
       const lineEnding = authNorm.hadCRLF !== mirrorNorm.hadCRLF;
@@ -314,6 +314,23 @@ async function selfTest() {
     await writeBoth(dirs, 'backup/src-patched/p1.mjs', 'x\n', null);
     cases.push({ name: '补丁清单文件缺失', dirs, expectOk: false, files: baseFiles, patch: basePatch });
   }
+  {
+    // 声明的脱敏规则：权威里是本机绝对路径，镜像里是占位符；规则命中 → 可接受。
+    const dirs = await makeDirs('redacted');
+    const redactions = [{ pattern: /C:\\Users\\someone/g, replacement: '<WORKSPACE>', reason: '机器路径占位化' }];
+    await writeBoth(dirs, 'a.mjs', 'cwd: "C:\\Users\\someone\\ws"\n', 'cwd: "<WORKSPACE>\\ws"\n');
+    await writeBoth(dirs, 'b.mjs', '# 文档\n', '# 文档\n');
+    await writeBoth(dirs, 'backup/src-patched/p1.mjs', 'x\n', 'x\n');
+    cases.push({ name: '声明的脱敏差异（放行）', dirs, expectOk: true, files: baseFiles, patch: basePatch, redactions, expectStatus: 'REDACTED_OK' });
+    cases.push({
+      name: '未命中的脱敏规则（仍失败）',
+      dirs,
+      expectOk: false,
+      files: baseFiles,
+      patch: basePatch,
+      redactions: [{ pattern: /C:\\Users\\nobody/g, replacement: '<X>', reason: '不命中' }],
+    });
+  }
 
   let failed = 0;
   for (const testCase of cases) {
@@ -323,10 +340,15 @@ async function selfTest() {
       toolingFiles: testCase.files,
       patchFiles: testCase.patch,
       strictEol: Boolean(testCase.strictEol),
+      redactions: testCase.redactions,
     });
-    const pass = result.ok === testCase.expectOk;
+    const statusOk = testCase.expectStatus ? result.rows.some((row) => row.status === testCase.expectStatus) : true;
+    const pass = result.ok === testCase.expectOk && statusOk;
     if (!pass) failed += 1;
-    console.log(`${pass ? 'PASS' : 'FAIL'}  ${testCase.name.padEnd(24)} 期望 ok=${testCase.expectOk} 实际 ok=${result.ok}`);
+    console.log(
+      `${pass ? 'PASS' : 'FAIL'}  ${testCase.name.padEnd(24)} 期望 ok=${testCase.expectOk} 实际 ok=${result.ok}` +
+        (testCase.expectStatus ? `（期望状态 ${testCase.expectStatus}：${statusOk ? '命中' : '未命中'}）` : ''),
+    );
     if (!pass) console.log('        ', JSON.stringify(result.counts));
   }
   await rm(root, { recursive: true, force: true });

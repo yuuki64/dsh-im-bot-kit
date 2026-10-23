@@ -495,7 +495,7 @@ IM 新会话在 DSH 侧栏落到「未分组」，而不是配置的 `bot-worksp
 ### 16.3 镜像同步（M2）
 - 补回镜像缺失的微信出站标签清理：`weixin-bridge.mjs` 的 `sanitizeOutboundText()` + `#send` 里的调用与空文本提前返回（权威 58417 B / 镜像原 57403 B）。
 - 新增 `.gitattributes`（`* text=auto eol=lf`），并把仓库里 11 个 CRLF 文件归一为 LF——之前"镜像与权威有差异"里有 4 个纯换行差异，是 `core.autocrlf=true` 造成的假差异。
-- 新增 `scripts/check-mirror-sync.mjs`：按 `manifest.mjs` 清单逐项比字节，缺文件/内容差异/镜像多出文件 → 失败；只差换行 → 警告（`--strict-eol` 可升级为失败）；脱敏差异必须走显式 `REDACTIONS` 规则；另外检查 `git ls-files` 里没有 token、node_modules、聊天库、本机音频。`--self-test` 覆盖 7 个负例。
+- 新增 `scripts/check-mirror-sync.mjs`：按 `manifest.mjs` 清单逐项比字节，缺文件/内容差异/镜像多出文件 → 失败；只差换行 → 警告（`--strict-eol` 可升级为失败）；脱敏差异必须走显式 `REDACTIONS` 规则（规则命中记 `REDACTED_OK`，没命中仍算差异）；另外检查 `git ls-files` 里没有 token、node_modules、聊天库、本机音频。`--self-test` 覆盖 9 个用例（含缺文件、内容差异、换行、脱敏命中/未命中、镜像多出文件）。另在镜像的临时副本上删 1 个文件、改 1 个文件做过一次真实数据负例：准确报 `MISSING_IN_MIRROR` + `CONTENT_DIFF`，权威目录未被修改。
 
 ### 16.4 回归（M4）
 - 新增 `test-weixin-outbound-tags.mjs`：从真实源码抽出 `sanitizeOutboundText` 求值后断言（不复制实现）——语音标签转普通文本、表情标签丢弃、普通文本保持、只有标签时不空投递，10 项。可以 `--file <path>` 指向任意副本，用来证明"镜像是真缺这段逻辑"。
