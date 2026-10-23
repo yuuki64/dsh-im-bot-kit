@@ -75,7 +75,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - 补丁源码与安装目录逐字节一致（期望 22 个文件，`node apply.mjs --check`）；
 - 从当前源码重新打包的结果与线上 `lib/index.js` **逐字节相同**（确定性构建，`node build-im.mjs --out <临时文件>` 后比 sha256）；
 - 构建基线已建立（`mode=adopt`），`verify-build.mjs` 四道门全部通过：补丁清单 / 源码已同步 / 产物已构建 / 进程已重启；
-- 镜像与权威补丁目录逐字节一致（37 个文件，`node scripts/check-mirror-sync.mjs`，`--strict-eol` 也通过）；
+- 镜像与权威补丁目录逐字节一致（37 个文件，`node scripts/check-mirror-sync.mjs`，`--strict-eol` 也通过）；另用临时副本删 1 个文件、改 1 个文件做真实负例，能准确报「缺文件 + 内容差异」且不动权威目录；
 - 微信出站标签清理回归 10 项通过（`node tools/im-patch/test-weixin-outbound-tags.mjs`）；
 - 私聊/群聊双开关自测、会话工作区归属自测通过（`test-im-switch.mjs`、`test-workspace-grouping.mjs`）。
 
