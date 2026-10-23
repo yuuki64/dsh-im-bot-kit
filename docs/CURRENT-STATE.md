@@ -10,7 +10,7 @@
 本机跑的是 `@xmanrui/dsh-im` 5.2.0 + 22 个文件的本地补丁集（引用图片、QQ 语音、表情包、私聊/群聊双开关、群聊接续、人设注入、微信出站标签清理等）。产物 `lib/index.js` 由 `tools/im-patch/build-im.mjs` 重新打包；QQ 行为冻结，维护阶段没有新增 QQ 功能。
 
 <!-- dsh-im-status:begin -->
-<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T14:14:19.766Z；数字来自代码清单与实测，不要手改 -->
+<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T14:26:26.321Z；数字来自代码清单与实测，不要手改 -->
 
 | 项 | 实测值 |
 | --- | --- |
@@ -19,8 +19,8 @@
 | 构建基线 | build · 2026-10-23T14:13:44.007Z（证据来自本机权威目录，不在本副本内） |
 | 构建输入 | 341 个源文件 · sha256 5eb1cfcb494dc255… |
 | 产物 bundle | 9,101,625 B · sha256 7af406b1475993d7… |
-| 核对结论 | `RUNTIME_NOT_RESTARTED`（`node tools/im-patch/verify-build.mjs`） |
-| 运行实例 | 尚未确认 |
+| 核对结论 | `OK`（`node tools/im-patch/verify-build.mjs`） |
+| 运行实例 | 已确认：进程启动时间晚于产物 mtime，加载的就是该 bundle |
 | 通道开关 | 私聊=开 群聊=开 |
 | 最后核验 | 2026-10-23 |
 
@@ -104,7 +104,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - **姐妹关系**：写在两个 bot 的 `bot.json` 的 `note` 里（随 `<dsh_im_identity>` 注入），不写进人设卡——yuri 知道 hiro 是亲姐姐，hiro 知道 yuri 是亲妹妹。
 - 微信：仍只有全局人设/音色（微信通道没有多 bot 概念，本轮不动）。
 - **唤醒词（2026-10-23 修）**：群里不 @ 也能按名字唤醒，匹配器按 `bots/<botId>/bot.json` 的 name+aliases 生成（ASCII 整词、中文子串）。hiro 认 `椎名/希罗/二阶堂希罗/hiro`，yuri 认 `yuri/小鲸鱼/DeepSeek/大肥鱼`；有 botId 但没 profile 的机器人只认 @。回归 `node tools/im-patch/test-bot-wake.mjs`。
-- **hiro 人设卡（2026-10-23）**：主人提供的「二阶堂希罗」人设卡已装到 `bots/qq_1a3b9ed…/persona.md`（5432 字符），并存了一份到 `personas/希罗.md` 供复用；顶部加了一段 QQ 环境补充（短回复、不复述设定）。
+- **hiro 人设卡（2026-10-23）**：已换成**精简对话版**（约 900 字符，装到 `bots/qq_1a3b9ed…/persona.md`，另存 `personas/希罗.md`）：只输出角色说的话、不写动作/心理/旁白、1~3 句、不写小作文；保留优等生/正义感/防剧透/yuri 是妹妹。原长卡仍在 OneDrive 桌面，可换回。
 - **额外音色按需启动（2026-10-23）**：`D:\tools\gpt-sovits\instances.json` 注册端点（17864 → `tts_infer_hiro.yaml`）。插件只在该 bot 真正发语音时才 spawn 对应实例，重启后不预占显存；实测冷启动约 26 秒。当前 17864 为停止状态。
 - **推理等级（2026-10-23）**：所有 IM 会话默认 **low**（`workspace-session.mjs` 在绑定后执行一次 `/reasoning low`；群聊跟随 `/effort` 上限，默认也 low）。每进程每会话一次，重启后旧会话也会在首条消息落回 low。
 - **回复长度（2026-10-23）**：`AGENTS.md` 与两个 bot 的 note 都写了「回复要短、不说小作文」；默认 1~3 句，私聊最多 5 句。
