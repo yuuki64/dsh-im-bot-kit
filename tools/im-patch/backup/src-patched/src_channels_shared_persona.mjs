@@ -77,7 +77,8 @@ export function readBotProfile(botId) {
     if (!name && !aliases.length) return null;
     const ownerRaw = typeof document.ownerOpenid === 'string' ? document.ownerOpenid.trim() : '';
     const ownerOpenid = /^[A-Za-z0-9*_-]{1,64}$/u.test(ownerRaw) ? ownerRaw : '';
-    return { name, aliases, ownerOpenid, note: typeof document.note === 'string' ? document.note.slice(0, 200) : '' };
+    const ownerName = typeof document.ownerName === 'string' ? document.ownerName.trim().slice(0, 40) : '';
+    return { name, aliases, ownerOpenid, ownerName, note: typeof document.note === 'string' ? document.note.slice(0, 200) : '' };
   } catch {
     return null;
   }
@@ -113,7 +114,11 @@ function identityBlock(profile) {
     unique.length > 1 ? `别人叫你 ${unique.slice(1).join('、')} 时也是在叫你。` : '',
     unique.length ? '自我介绍、被点名、被问“你是谁”时用这个名字，不要用别的机器人的名字。' : '',
     profile.ownerOpenid
-      ? `这个机器人的主人 openid：${profile.ownerOpenid}。只有消息开头 <dsh_im_source> 里的 senderId 与它精确相等才算主人，其他人一律按第三方处理。`
+      ? [
+        `这个机器人的主人${profile.ownerName ? `是 ${profile.ownerName}` : ''}，openid：${profile.ownerOpenid}。`,
+        `判别方法：本条消息开头 <dsh_im_source> 里的 senderId 与这个 openid 精确相等 → 就是主人，按「对主人」的规则说话，称呼用${profile.ownerName ? `「${profile.ownerName}」或` : ''}「主人」；不相等 → 其他人，按第三方处理。`,
+        `源块里如果直接给了 senderName（例如 ${profile.ownerName || '主人'}），也可以用它对照，但以 openid 相等为准。`,
+      ].join('')
       : '',
     profile.note ? `备注：${profile.note}` : '',
     '</dsh_im_identity>',

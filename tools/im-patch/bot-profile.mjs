@@ -180,6 +180,7 @@ function cmdName(botId, flags) {
       .map((alias) => String(alias).trim().slice(0, 40))
       .filter(Boolean),
     ownerOpenid: typeof owner === 'string' ? owner.trim().slice(0, 64) : '',
+    ownerName: (flags['owner-name'] ?? current.ownerName ?? '').toString().trim().slice(0, 40),
     note: (flags.note ?? current.note ?? '').slice(0, 200),
   };
   if (!next.name && !next.aliases.length) fail('至少要给 --name 或 --aliases');
@@ -187,6 +188,7 @@ function cmdName(botId, flags) {
   console.log(`已写 ${join(dir, 'bot.json')}`);
   console.log(`  名字：${next.name || '（未设）'}  别名：${next.aliases.join('、') || '（未设）'}`);
   console.log(`  主人 openid：${next.ownerOpenid || '（未设置，需要 --owner 指定）'}`);
+  console.log(`  主人称呼：${next.ownerName || '（未设置，可用 --owner-name 指定）'}`);
 }
 
 function cmdPersona(botId, cardName) {

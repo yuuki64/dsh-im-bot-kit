@@ -659,3 +659,13 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 ### 17.13 表情包频率下调（2026-10-23，主人要求）
 
 最初改成每 2~4 条一张，主人觉得太密；改成 **平均每 15~20 条回复带一张**（`AGENTS.md` + yuri 人设 `persona.md`/`小鲸鱼.md` + hiro 人设）。纯提示词，立即生效。
+### 17.14 主人称呼注入（2026-10-23，修「椎名认不得主人」）
+
+原因：身份块只注入了主人的 **openid**，模型不知道主人叫什么，所以椎名问「还没告诉我该怎么称呼」。主人 openid 本身是对的（群里实测 sender_id `9D0C02EB…` = 配置 owner，yuri 侧 `A051E01D…` 一致）。
+
+修复：`bot.json` 新增 `ownerName`（`bot-profile.mjs name <botId> --owner-name yuuki`），身份块升级为：
+- 「这个机器人的主人是 yuuki，openid：…」
+- 明写判别方法：消息开头 `<dsh_im_source>` 的 senderId 与该 openid 精确相等 → 主人；称呼用「yuuki」或「主人」
+- 提示可用源块里的 senderName 对照，但以 openid 为准
+
+两个 bot 都已设 `ownerName: yuuki`；回归 `test-bot-profiles.mjs` 增加「主人称呼注入」断言。
