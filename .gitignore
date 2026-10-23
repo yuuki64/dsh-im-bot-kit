@@ -8,6 +8,8 @@ tools/im-patch/backup/lib-index.js.*
 tools/im-patch/backup/pre-apply-*/
 tools/im-patch/*.tgz
 tools/im-patch/package-lock.json.orig
+# 本机构建证据（含绝对路径；每台机器用 node tools/im-patch/build-im.mjs 自己生成）
+tools/im-patch/build-manifest.json
 
 # runtime data (never commit)
 *.log

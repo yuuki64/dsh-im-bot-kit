@@ -15,45 +15,18 @@
  * 跨版本强行恢复等于把那些文件降级回 5.2.0 —— 非 5.2.0 请先重新推导补丁。
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { FILES, UPSTREAM, resolvePatchTarget, resolvePluginRoot } from './manifest.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has('--check');
 const force = args.has('--force');
 
-const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
-const profile = process.env.DSH_PROFILE_DIR ?? join(home, 'profiles', 'desktop');
-const pluginRoot = join(profile, 'node_modules', '@xmanrui', 'dsh-im');
-
-/** 备份文件名 -> [插件内相对路径, 基线目录（src 或 plugin-src/host）] */
-const FILES = [
-  ['src_channels_qq_qq-bridge.mjs', 'channels/qq/qq-bridge.mjs'],
-  ['src_channels_shared_group-history-store.mjs', 'channels/shared/group-history-store.mjs'],
-  ['src_channels_shared_image-prompt.mjs', 'channels/shared/image-prompt.mjs'],
-  ['src_channels_shared_quoted-media.mjs', 'channels/shared/quoted-media.mjs'],
-  ['src_channels_shared_voice-synth.mjs', 'channels/shared/voice-synth.mjs'],
-  ['src_channels_shared_kokoro-tts.mjs', 'channels/shared/kokoro-tts.mjs'],
-  ['src_channels_shared_gpu-tts.mjs', 'channels/shared/gpu-tts.mjs'],
-  ['src_channels_shared_gsv-tts.mjs', 'channels/shared/gsv-tts.mjs'],
-  ['src_channels_shared_persona.mjs', 'channels/shared/persona.mjs'],
-  ['src_channels_shared_busy-message-dispatcher.mjs', 'channels/shared/busy-message-dispatcher.mjs'],
-  ['src_channels_shared_sticker-library.mjs', 'channels/shared/sticker-library.mjs'],
-  ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],
-  ['src_channels_shared_harness-client.mjs', 'channels/shared/harness-client.mjs'],
-  ['src_channels_shared_group-reasoning.mjs', 'channels/shared/group-reasoning.mjs'],
-  ['src_channels_shared_im-switch.mjs', 'channels/shared/im-switch.mjs'],
-  ['src_channels_shared_im-switch-server.mjs', 'channels/shared/im-switch-server.mjs'],
-  ['src_channels_shared_inbound-access.mjs', 'channels/shared/inbound-access.mjs'],
-  ['src_channels_shared_semantic_artifact.mjs', 'channels/shared/semantic/artifact.mjs'],
-  ['src_channels_shared_semantic_artifact-delivery.mjs', 'channels/shared/semantic/artifact-delivery.mjs'],
-  ['src_channels_weixin_weixin-api.mjs', 'channels/weixin/weixin-api.mjs'],
-  ['src_channels_weixin_weixin-bridge.mjs', 'channels/weixin/weixin-bridge.mjs'],
-  ['plugin-src_host_channels_shared_startup.mjs', 'channels/shared/startup.mjs', 'plugin-src/host'],
-];
+const pluginRoot = resolvePluginRoot();
 
 
 function fail(message) {
@@ -63,17 +36,16 @@ function fail(message) {
 
 if (!existsSync(pluginRoot)) fail(`dsh-im 插件不存在：${pluginRoot}`);
 const pkg = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'));
-if (pkg.version !== '5.2.0' && !force) {
-  fail(`插件版本是 ${pkg.version}，本补丁集只对 5.2.0 有效；确认要覆盖就加 --force`);
+if (pkg.version !== UPSTREAM.version && !force) {
+  fail(`插件版本是 ${pkg.version}，本补丁集只对 ${UPSTREAM.version} 有效；确认要覆盖就加 --force`);
 }
 
 const backupRoot = join(here, 'backup', 'src-patched');
 const missing = FILES.filter(([name]) => !existsSync(join(backupRoot, name)));
 if (missing.length) fail(`补丁集缺文件：${missing.map(([n]) => n).join(', ')}`);
 
-const target = (rel, base = 'src') => join(pluginRoot, base, rel);
 const same = ([name, rel, base]) => {
-  const live = target(rel, base);
+  const live = resolvePatchTarget(pluginRoot, [name, rel, base]);
   return existsSync(live) && readFileSync(live).equals(readFileSync(join(backupRoot, name)));
 };
 
@@ -83,14 +55,15 @@ if (checkOnly) {
   console.log(`${silk ? 'OK  ' : 'MISS'} node_modules/silk-wasm`);
   const lib = join(pluginRoot, 'lib', 'index.js');
   const built = existsSync(lib) && readFileSync(lib, 'utf8').includes('imagesForPlatformMessage');
-  console.log(`${built ? 'OK  ' : 'MISS'} lib/index.js 已包含补丁`);
+  // 字符串标记只能证明"打过补丁"，不能证明产物对应当前源码；完整证据见 verify-build.mjs。
+  console.log(`${built ? 'OK  ' : 'MISS'} lib/index.js 已包含补丁（仅标记；产物/源码一致性用 node verify-build.mjs）`);
   process.exit(0);
 }
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const preApply = join(here, 'backup', `pre-apply-${stamp}`);
 for (const [name, rel, base] of FILES) {
-  const live = target(rel, base);
+  const live = resolvePatchTarget(pluginRoot, [name, rel, base]);
   if (!existsSync(live)) continue;
   const to = join(preApply, name);
   mkdirSync(dirname(to), { recursive: true });
@@ -98,7 +71,7 @@ for (const [name, rel, base] of FILES) {
 }
 
 for (const [name, rel, base] of FILES) {
-  const live = target(rel, base);
+  const live = resolvePatchTarget(pluginRoot, [name, rel, base]);
   mkdirSync(dirname(live), { recursive: true });
   cpSync(join(backupRoot, name), live);
   console.log(`copied  ${base ? `${base}/` : 'src/'}${rel}`);
@@ -137,5 +110,6 @@ const absent = markers.filter((marker) => !lib.includes(marker));
 if (absent.length) fail(`打包结果缺少标记：${absent.join(', ')}`);
 console.log(`built   lib/index.js (${statSync(libPath).size} B，标记齐全)`);
 console.log('\n完成。完全退出 DeepSeek Harness 再打开，补丁才会生效。');
+console.log('重启后用 `node verify-build.mjs` 核对源码/产物/运行实例是否同一版本。');
 console.log(`本次改动前的文件备份在：${preApply}`);
 writeFileSync(join(preApply, 'APPLIED.txt'), `${new Date().toISOString()}\nfiles: ${FILES.length}\n`);
