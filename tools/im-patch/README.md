@@ -692,3 +692,11 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 - 节流放宽为 **3 秒 1 次 / 5 分钟 20 次**（`botReplyAllowed()` 纯函数，可用 `DSH_IM_BOT_REPLY_MIN_MS` / `DSH_IM_BOT_REPLY_MAX` 覆盖），仍然防止两个机器人无限对刷；
 - `AGENTS.md` 新增：**被另一个机器人点名必须回一句**（1~2 句就收）。
 - 回归：`node test-bot-reply-throttle.mjs`（6 项）。
+### 17.17 主人说暧昧称呼时全员吃醋（2026-10-23，主人要求）
+
+规则：**主人**（各 bot 自己的 ownerUserOpenid）发的消息里出现「宝宝 / 宝贝 / 亲爱的 / 老公 / 老婆 / 达令 / darling / honey / babes / 小可爱 / 亲亲 / 么么 / my love」时：
+- 即使没点名、@ 的是别人，**每个机器人都会接话**（代码层把它当作被叫到）；
+- 语气由提示词约束：吃醋、嘴硬、宣示主权，1~2 句，不骂人、不说教；叫的是自己时嘴上不承认但别否认关系。
+
+实现：`qq-bridge.mjs` 新增 `OWNER_AFFECTION_PATTERN` + 导出纯函数 `isOwnerAffectionText(text)`；`#shouldReply()` 在 dismiss 判定之后、mention-other 清除之前，对 `isOwnerSender(...) && isOwnerAffectionText(text)` 直接返回 true 并标记 engaged。非主人发同样的词不触发。
+回归：`node test-owner-affection.mjs`（23 项：14 种称呼命中、普通消息不误触发、空/空白/非字符串安全）。
