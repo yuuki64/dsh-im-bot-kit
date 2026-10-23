@@ -292,8 +292,8 @@ function parseVoiceCommand(text) {
 }
 
 /** Human-readable summary of the persisted voice settings. */
-async function voiceSettingsSummary() {
-  const settings = await readVoiceSettings();
+async function voiceSettingsSummary(botId) {
+  const settings = await readVoiceSettings({ botId });
   return `${settings.voice}（${settings.provider}）· speed ${settings.speed}`
     + ` · pitch ${settings.pitch >= 0 ? '+' : ''}${settings.pitch}%`
     + ` · rate ${settings.rate >= 0 ? '+' : ''}${settings.rate}%`;
@@ -676,6 +676,7 @@ export function createQqBridgeStatus() {
 
 export class QqHarnessBridge {
   #bot;
+  #botId;
   #ownerUserOpenid;
   #harness;
   #state;
@@ -715,6 +716,7 @@ export class QqHarnessBridge {
 
   constructor({
     bot,
+    botId,
     ownerUserOpenid,
     harness,
     state,
@@ -736,6 +738,10 @@ export class QqHarnessBridge {
       throw new TypeError('fileUploadTimeoutMs must be a positive integer');
     }
     this.#bot = bot;
+    // Per-bot persona / wake words / voice live under integrations/dsh-im/bots/<botId>/.
+    // Without a botId the bridge keeps the legacy global persona + voice.json.
+    this.#botId = typeof botId === 'string' && /^[A-Za-z0-9_-]{1,80}$/u.test(botId.trim())
+      ? botId.trim() : '';
     this.#ownerUserOpenid = ownerUserOpenid;
     this.#harness = harness;
     this.#state = state;
@@ -799,7 +805,7 @@ export class QqHarnessBridge {
 
   /** Warm the voice sidecar so the first voice reply is not a cold start. */
   #warmVoiceSidecar() {
-    void readVoiceSettings().then(async (settings) => {
+    void readVoiceSettings({ botId: this.#botId }).then(async (settings) => {
       // Only keep the sidecar for the active provider resident in VRAM.
       if (settings.provider === 'gsv') {
         await ensureGsv();
@@ -1680,7 +1686,7 @@ export class QqHarnessBridge {
       if (!this.#state.hasSeen(messageId)) await this.#state.markSeen(messageId);
       switch (command?.kind) {
         case 'list': {
-          const [voices, current] = await Promise.all([listInstalledVoices(), readVoiceSettings()]);
+          const [voices, current] = await Promise.all([listInstalledVoices(), readVoiceSettings({ botId: this.#botId })]);
           const kokoro = KOKORO_VOICES
             .map((entry) => `${entry.alias} = ${entry.name}（${entry.hint}）`)
             .join('\n');
@@ -1688,7 +1694,7 @@ export class QqHarnessBridge {
             .map((voice) => `· ${voice.name}${voice.language ? ` ${voice.language}` : ''}${voice.gender ? ` ${voice.gender}` : ''}`)
             .join('\n');
           await this.#bot.sendText(target, t('当前：{current}\n\nKokoro 二次元音色（本地 CPU）：\n{kokoro}\n\nWindows 本机音色：\n{installed}\n\n用法：/voice set xiaobei · /voice speed 1.1',
-            { current: await voiceSettingsSummary(), kokoro, installed }));
+            { current: await voiceSettingsSummary(this.#botId), kokoro, installed }));
           break;
         }
         case 'set': {
@@ -1698,7 +1704,7 @@ export class QqHarnessBridge {
             await this.#bot.sendText(target, t('用法：/voice set xiaobei（可用：xiaobei / xiaoni / xiaoxiao / xiaoyi / yaoyao / huihui）'));
             break;
           }
-          const next = await writeVoiceSettings({ provider: choice.provider, voice: choice.voice });
+          const next = await writeVoiceSettings({ provider: choice.provider, voice: choice.voice }, { botId: this.#botId });
           if (next.provider === 'gsv') void stopGpuTts();
           else if (next.provider === 'f5') void stopGsv();
           await this.#bot.sendText(target, t('语音已换成：{voice}（{provider}）\n试听：/voice test', {
@@ -1715,7 +1721,7 @@ export class QqHarnessBridge {
             await this.#bot.sendText(target, t('\u53ef\u7528\u89d2\u8272\u53c2\u8003\uff1a{names}\n\u7528\u6cd5\uff1a/voice char <\u540d\u5b57>', { names }));
             break;
           }
-          const next = await writeVoiceSettings({ character: value });
+          const next = await writeVoiceSettings({ character: value }, { botId: this.#botId });
           await this.#bot.sendText(target, t('\u5df2\u5207\u5230 GPU \u514b\u9686\u97f3\u8272\uff1a{character}\uff08{provider}\uff09\n\u8bd5\u542c\uff1a/voice test', {
             character: next.character, provider: next.provider,
           }));
@@ -1727,7 +1733,7 @@ export class QqHarnessBridge {
             await this.#bot.sendText(target, t('用法：/voice speed 1.1（0.5~2.0，仅 Kokoro 音色生效）'));
             break;
           }
-          const next = await writeVoiceSettings({ speed: value });
+          const next = await writeVoiceSettings({ speed: value }, { botId: this.#botId });
           await this.#bot.sendText(target, t('语速已设为：{speed}', { speed: next.speed }));
           break;
         }
@@ -1740,7 +1746,7 @@ export class QqHarnessBridge {
             }));
             break;
           }
-          const next = await writeVoiceSettings({ [command.kind]: value });
+          const next = await writeVoiceSettings({ [command.kind]: value }, { botId: this.#botId });
           await this.#bot.sendText(target, t('已更新：{summary}', { summary: t('{voice} · pitch {pitch}% · rate {rate}%', {
             voice: next.voice,
             pitch: `${next.pitch >= 0 ? '+' : ''}${next.pitch}`,
@@ -1749,7 +1755,7 @@ export class QqHarnessBridge {
           break;
         }
         case 'reset': {
-          const next = await writeVoiceSettings({ ...DEFAULT_VOICE_SETTINGS });
+          const next = await writeVoiceSettings({ ...DEFAULT_VOICE_SETTINGS }, { botId: this.#botId });
           await this.#bot.sendText(target, t('语音设置已恢复默认：{voice}', { voice: next.voice }));
           break;
         }
@@ -1759,7 +1765,10 @@ export class QqHarnessBridge {
             await this.#bot.sendText(target, t('用法：/voice 要说的话（最长 60 秒）'));
             break;
           }
-          const { silk, durationMs, provider } = await synthesizeSpeechSilk(say, { signal: this.#signal });
+          const { silk, durationMs, provider } = await synthesizeSpeechSilk(say, {
+            signal: this.#signal,
+            settings: await readVoiceSettings({ botId: this.#botId }),
+          });
           await sendQqVoice(this.#bot, target, {
             bytes: silk,
             fileName: 'voice.silk',
@@ -1773,7 +1782,7 @@ export class QqHarnessBridge {
         default: {
           await this.#bot.sendText(target, t(
             '语音用法：\n/voice 要说的话  发一条语音\n/voice list  看当前音色和可用音色\n/voice set yaoyao  换音色\n/voice pitch +15  调音高（-50~+50）\n/voice rate +5  调语速（-30~+30）\n/voice reset  恢复默认\n当前：{current}',
-            { current: await voiceSettingsSummary() },
+            { current: await voiceSettingsSummary(this.#botId) },
           ));
         }
       }
@@ -1941,7 +1950,7 @@ export class QqHarnessBridge {
           text,
           content,
           titleText: batchSubmission?.title,
-          sourceGuidance: applyPersona(snapshot?.config?.guidance),
+          sourceGuidance: applyPersona(snapshot?.config?.guidance, { botId: this.#botId }),
           contextEnhanced,
           createOptions: { signal: this.#signal },
           existsOptions: { signal: this.#signal },
@@ -2001,6 +2010,7 @@ export class QqHarnessBridge {
         try {
           const { silk, durationMs, provider } = await synthesizeSpeechSilk(mediaIntent.voiceText, {
             signal: this.#signal,
+            settings: await readVoiceSettings({ botId: this.#botId }),
           });
           await sendQqVoice(this.#bot, target, {
             bytes: silk,

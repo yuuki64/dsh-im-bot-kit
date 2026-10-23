@@ -20,6 +20,7 @@ export const UPSTREAM = Object.freeze({
  */
 export const FILES = Object.freeze([
   ['src_channels_qq_qq-bridge.mjs', 'channels/qq/qq-bridge.mjs'],
+  ['src_channels_qq_qq-runtime.mjs', 'channels/qq/qq-runtime.mjs'],
   ['src_channels_shared_group-history-store.mjs', 'channels/shared/group-history-store.mjs'],
   ['src_channels_shared_image-prompt.mjs', 'channels/shared/image-prompt.mjs'],
   ['src_channels_shared_quoted-media.mjs', 'channels/shared/quoted-media.mjs'],

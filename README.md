@@ -105,6 +105,9 @@ pwsh scripts/rebuild.ps1
 node tools/im-patch/status.mjs                    # 现在跑的是哪份源码/产物、通道开关
 node tools/im-patch/verify-build.mjs              # 补丁清单 / 源码已同步 / 产物已构建 / 进程已重启（带退出码）
 node tools/im-patch/verify-build.mjs --self-test  # 用临时副本验证"缺清单、版本不符、源码/产物漂移、没重启"都能准确失败
+node tools/im-patch/bot-profile.mjs list          # 每个 QQ 机器人的名字/人设/音色来源
+node tools/im-patch/bot-profile.mjs check         # 检查人设卡、唤醒词、GSV 参考音是否齐全
+node tools/im-patch/test-bot-profiles.mjs         # 多机器人人设/音色隔离回归
 node tools/im-patch/test-weixin-outbound-tags.mjs # 微信出站标签清理回归
 node scripts/check-mirror-sync.mjs                # 镜像是否与本机权威补丁目录逐字节一致
 ```

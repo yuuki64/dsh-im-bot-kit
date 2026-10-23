@@ -10,6 +10,7 @@
 // encoded to Tencent SILK with silk-wasm (no ffmpeg).
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -169,15 +170,26 @@ function numbered(value, fallback = 0) {
   return Number.isFinite(number) ? Math.round(number) : fallback;
 }
 
-export function voiceSettingsPath() {
+/**
+ * Voice settings file for a bot: `<DSH_HOME>/integrations/dsh-im/bots/<botId>/voice.json`
+ * when that bot has its own file, otherwise the global `voice.json`. With no
+ * botId this is exactly the legacy global path.
+ */
+export function voiceSettingsPath(botId) {
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+  const clean = typeof botId === 'string' && /^[A-Za-z0-9_-]{1,80}$/u.test(botId.trim())
+    ? botId.trim() : '';
+  if (clean) {
+    const own = join(home, 'integrations', 'dsh-im', 'bots', clean, 'voice.json');
+    if (existsSync(own)) return own;
+  }
   return join(home, 'integrations', 'dsh-im', 'voice.json');
 }
 
 /** Read persisted voice settings; malformed or missing files fall back to defaults. */
-export async function readVoiceSettings() {
+export async function readVoiceSettings({ botId } = {}) {
   try {
-    const raw = await readFile(voiceSettingsPath(), 'utf8');
+    const raw = await readFile(voiceSettingsPath(botId), 'utf8');
     const document = JSON.parse(raw);
     if (!document || typeof document !== 'object') return { ...DEFAULT_VOICE_SETTINGS };
     const provider = document.provider === 'sapi' || document.provider === 'onecore'
@@ -186,11 +198,15 @@ export async function readVoiceSettings() {
     const voice = typeof document.voice === 'string' ? document.voice.trim() : DEFAULT_VOICE_SETTINGS.voice;
     const character = typeof document.character === 'string' && document.character.trim()
       ? document.character.trim() : DEFAULT_VOICE_SETTINGS.character;
+    // Optional per-bot GSV endpoint (a second sidecar holding another character's model).
+    const endpoint = typeof document.endpoint === 'string' && /^https?:\/\//u.test(document.endpoint.trim())
+      ? document.endpoint.trim().slice(0, 200) : '';
     return {
       version: 1,
       provider,
       voice: voice || DEFAULT_VOICE_SETTINGS.voice,
       character,
+      endpoint,
       steps: Math.min(48, Math.max(8, numbered(document.steps, DEFAULT_VOICE_SETTINGS.steps))),
       speed: Math.min(2, Math.max(0.5, Number(document.speed) || DEFAULT_VOICE_SETTINGS.speed)),
       pitch: clamp(numbered(document.pitch, DEFAULT_VOICE_SETTINGS.pitch), -50, 50),
@@ -202,8 +218,8 @@ export async function readVoiceSettings() {
 }
 
 /** Persist settings atomically (write tmp + rename). */
-export async function writeVoiceSettings(patch) {
-  const current = await readVoiceSettings();
+export async function writeVoiceSettings(patch, { botId } = {}) {
+  const current = await readVoiceSettings({ botId });
   const next = {
     version: 1,
     provider: ['sapi', 'onecore', 'kokoro', 'f5', 'gsv'].includes(patch.provider)
@@ -211,6 +227,10 @@ export async function writeVoiceSettings(patch) {
     voice: typeof patch.voice === 'string' && patch.voice.trim() ? patch.voice.trim() : current.voice,
     character: typeof patch.character === 'string' && patch.character.trim()
       ? patch.character.trim().slice(0, 60) : current.character,
+    endpoint: patch.endpoint === undefined
+      ? (current.endpoint ?? '')
+      : (typeof patch.endpoint === 'string' && /^https?:\/\//u.test(patch.endpoint.trim())
+        ? patch.endpoint.trim().slice(0, 200) : ''),
     steps: patch.steps === undefined
       ? current.steps : Math.min(48, Math.max(8, numbered(patch.steps, current.steps))),
     speed: patch.speed === undefined
@@ -218,7 +238,7 @@ export async function writeVoiceSettings(patch) {
     pitch: patch.pitch === undefined ? current.pitch : clamp(numbered(patch.pitch, current.pitch), -50, 50),
     rate: patch.rate === undefined ? current.rate : clamp(numbered(patch.rate, current.rate), -30, 30),
   };
-  const path = voiceSettingsPath();
+  const path = voiceSettingsPath(botId);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
@@ -327,6 +347,7 @@ export async function synthesizeSpeechWav(text, {
       const result = await synthesizeGsvWav(say, {
         character: current.character,
         speed: current.speed,
+        ...(current.endpoint ? { endpoint: current.endpoint } : {}),
       });
       signal?.throwIfAborted();
       return { wav: result.wav, settings: current, provider: 'gsv' };
