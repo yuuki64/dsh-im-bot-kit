@@ -700,3 +700,15 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 
 实现：`qq-bridge.mjs` 新增 `OWNER_AFFECTION_PATTERN` + 导出纯函数 `isOwnerAffectionText(text)`；`#shouldReply()` 在 dismiss 判定之后、mention-other 清除之前，对 `isOwnerSender(...) && isOwnerAffectionText(text)` 直接返回 true 并标记 engaged。非主人发同样的词不触发。
 回归：`node test-owner-affection.mjs`（23 项：14 种称呼命中、普通消息不误触发、空/空白/非字符串安全）。
+### 17.18 修 STATE_WRITE_FAILED / EPERM（2026-10-23，椎名反复报 INTERNAL_UNKNOWN）
+
+现象：椎名在群里回复时报「任务未完成…INTERNAL_UNKNOWN；参考号 MF-…」，日志里对应 `STATE_WRITE_FAILED / EPERM`（22:24、22:28、23:12、23:13 各一次，越来越频繁）。`state.json` 的 mtime 却在正常更新。
+
+根因：`channels/qq/state-store.mjs` 的持久化是「写 `.tmp` → `rename` 覆盖目标」。Windows 上如果目标文件刚好被杀毒/索引服务短暂打开（或用 `fs.open` 读），`rename` 会抛 `EPERM/EACCES/EBUSY`，整个消息处理就失败 → 回一条 INTERNAL_UNKNOWN 给群里。
+
+修复：新增 `writeSnapshotAtomically(fs, path, snapshot)`（本次进入补丁集，manifest 第 25 个文件）：
+- `.tmp` + `rename` 失败且错误码属于 EPERM/EACCES/EBUSY/ENOTEMPTY/EAGAIN/EMFILE 时**退避重试**（最多 6 次，40ms 起线性递增）；
+- 6 次仍失败则**退化为直接覆盖目标文件**（非原子但不丢状态）；
+- 其他错误（磁盘满等）照常抛出，不掩盖。
+
+回归：`node test-state-write-retry.mjs`（6 项：正常 rename、EPERM 重试成功、一直失败退化直写、非锁错误不重试、先写 .tmp）。
