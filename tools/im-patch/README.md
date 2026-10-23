@@ -597,3 +597,22 @@ hiro 的别名最终为 `椎名 / 希罗 / 二阶堂希罗 / hiro`。
   群聊原有的模型级 clamp（`bot-workspace-store.mjs` 的 `clampGroupModelSelection`）保持不变。
 - **回复要短**：`<DSH_HOME>\AGENTS.md` 新增「所有 IM 机器人回复都要短（不说小作文）」，两个 bot 的 `bot.json` note 也写了「回复一律简短，不说小作文」，两层约束。
 - 补丁集 23 → **24 个文件**。生效需要重启 DSH。
+
+### 17.8 群聊「叫名字就唤醒」按 bot 区分（2026-10-23，修 hiro 在群里没反应）
+
+现象：群里发「hiro说句话」hiro 不回复。根因是 `qq-bridge.mjs` 把唤醒名字**写死**成 yuri 那一套：
+
+```js
+const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|deepseek|大肥鱼/iu;
+```
+
+椎名 / hiro / 希罗 都不在里面，所以群里不 @ 就不算叫到它（私聊不受影响——私聊直接回复，所以 hiro 私聊是正常的）。
+
+修复：
+- 新增 `nameMentionPatternForNames(names)`：ASCII 名字按整词匹配（`hiro` 不会命中 `hiroshi`），中文名按子串匹配；
+- `QqHarnessBridge` 构造时读 `bots/<botId>/bot.json` 的 `name + aliases` 生成这个 bot 自己的匹配器；
+- **有 botId 但没有 profile 的机器人不再继承 yuri 的唤醒词**（只认 @），避免多个机器人抢同一句「yuri」；
+- 没有 botId 的旧路径继续用 yuri 默认名单（行为不变）；
+- yuri 的别名补回 `大肥鱼`，保持原来的唤醒范围。
+
+回归：`node test-bot-wake.mjs`（17 项）——hiro 被 `hiro/椎名/希罗/二阶堂希罗/HIRO` 唤醒、不被 `yuri/小鲸鱼/大肥鱼` 误唤醒；yuri 反之；无 profile 的 bot 匹配器为 null。
