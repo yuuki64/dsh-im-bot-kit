@@ -27,7 +27,7 @@ mkdirSync(join(imDir, 'bots', botB), { recursive: true });
 writeFileSync(join(imDir, 'persona.md'), '# 全局人设\n全局默认角色\n', 'utf8');
 writeFileSync(join(imDir, 'personas', '椎名.md'), '# 角色卡：椎名\n冷静、简短。\n', 'utf8');
 writeFileSync(join(imDir, 'voice.json'), JSON.stringify({ version: 1, provider: 'gsv', voice: 'gsv', character: 'dafeiyu', steps: 16, speed: 0.9, pitch: 15, rate: 0 }, null, 2), 'utf8');
-writeFileSync(join(imDir, 'bots', botB, 'bot.json'), JSON.stringify({ version: 1, name: '椎名', aliases: ['希罗', '二阶堂希罗'], ownerOpenid: 'A318D75E6FC8AC3F322B8E95A9463CB3', note: '' }, null, 2), 'utf8');
+writeFileSync(join(imDir, 'bots', botB, 'bot.json'), JSON.stringify({ version: 1, name: '椎名', aliases: ['希罗', '二阶堂希罗'], ownerOpenid: 'A318D75E6FC8AC3F322B8E95A9463CB3', ownerName: 'yuuki', note: '' }, null, 2), 'utf8');
 writeFileSync(join(imDir, 'bots', botB, 'persona.md'), '# 角色卡：椎名\n冷静、简短。\n', 'utf8');
 writeFileSync(join(imDir, 'bots', botB, 'voice.json'), JSON.stringify({ version: 1, provider: 'gsv', voice: 'gsv', character: 'shiro', steps: 16, speed: 0.95, pitch: 8, rate: 0 }, null, 2), 'utf8');
 
@@ -53,6 +53,7 @@ try {
   check('bot 私有 persona 生效', botBGuidance.includes('冷静、简短。') && !botBGuidance.includes('全局默认角色'));
   check('唤醒词/别名注入身份块', botBGuidance.includes('<dsh_im_identity>')
     && botBGuidance.includes('椎名') && botBGuidance.includes('希罗') && botBGuidance.includes('二阶堂希罗'));
+  check('主人称呼注入（--owner-name）', botBGuidance.includes('主人是 yuuki'));
   check('每个 bot 的主人 openid 独立注入',
     botBGuidance.includes('A318D75E6FC8AC3F322B8E95A9463CB3') && !globalGuidance.includes('A318D75E'));
   check('persona 在身份块之后（人设优先级更高）',
