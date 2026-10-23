@@ -10,15 +10,15 @@
 本机跑的是 `@xmanrui/dsh-im` 5.2.0 + 22 个文件的本地补丁集（引用图片、QQ 语音、表情包、私聊/群聊双开关、群聊接续、人设注入、微信出站标签清理等）。产物 `lib/index.js` 由 `tools/im-patch/build-im.mjs` 重新打包；QQ 行为冻结，维护阶段没有新增 QQ 功能。
 
 <!-- dsh-im-status:begin -->
-<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T13:59:04.867Z；数字来自代码清单与实测，不要手改 -->
+<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T14:03:54.168Z；数字来自代码清单与实测，不要手改 -->
 
 | 项 | 实测值 |
 | --- | --- |
 | 上游版本 | @xmanrui/dsh-im 5.2.0（补丁集适配 5.2.0） |
 | 补丁文件数 | 24（由 tools/im-patch/manifest.mjs 生成） |
-| 构建基线 | build · 2026-10-23T13:58:18.925Z（证据来自本机权威目录，不在本副本内） |
-| 构建输入 | 341 个源文件 · sha256 9e72f7f73d464c62… |
-| 产物 bundle | 9,100,012 B · sha256 c4a02928a370eb21… |
+| 构建基线 | build · 2026-10-23T14:03:02.488Z（证据来自本机权威目录，不在本副本内） |
+| 构建输入 | 341 个源文件 · sha256 a75d3cbcfba732a7… |
+| 产物 bundle | 9,100,489 B · sha256 faf632c6ca9e48bd… |
 | 核对结论 | `RUNTIME_NOT_RESTARTED`（`node tools/im-patch/verify-build.mjs`） |
 | 运行实例 | 尚未确认 |
 | 通道开关 | 私聊=开 群聊=开 |
@@ -103,6 +103,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - **未完成**：无（v2ProPlus 微调已接通）；如需换参考音/重训，数据集仍在 `C:\Users\yuuki\OneDrive\桌面\hiro`。
 - **姐妹关系**：写在两个 bot 的 `bot.json` 的 `note` 里（随 `<dsh_im_identity>` 注入），不写进人设卡——yuri 知道 hiro 是亲姐姐，hiro 知道 yuri 是亲妹妹。
 - 微信：仍只有全局人设/音色（微信通道没有多 bot 概念，本轮不动）。
+- **唤醒词（2026-10-23 修）**：群里不 @ 也能按名字唤醒，匹配器按 `bots/<botId>/bot.json` 的 name+aliases 生成（ASCII 整词、中文子串）。hiro 认 `椎名/希罗/二阶堂希罗/hiro`，yuri 认 `yuri/小鲸鱼/DeepSeek/大肥鱼`；有 botId 但没 profile 的机器人只认 @。回归 `node tools/im-patch/test-bot-wake.mjs`。
 - **推理等级（2026-10-23）**：所有 IM 会话默认 **low**（`workspace-session.mjs` 在绑定后执行一次 `/reasoning low`；群聊跟随 `/effort` 上限，默认也 low）。每进程每会话一次，重启后旧会话也会在首条消息落回 low。
 - **回复长度（2026-10-23）**：`AGENTS.md` 与两个 bot 的 note 都写了「回复要短、不说小作文」；默认 1~3 句，私聊最多 5 句。
 
