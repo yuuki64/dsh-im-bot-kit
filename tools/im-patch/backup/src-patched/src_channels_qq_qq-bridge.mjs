@@ -176,6 +176,17 @@ export function botReplyAllowed(history, now = Date.now()) {
   return { allowed: true, history: kept };
 }
 
+// Owner-only jealousy trigger: an intimate nickname from the owner means every
+// bot answers (and acts jealous), even when the line was aimed at someone else.
+const OWNER_AFFECTION_PATTERN = /宝宝|宝贝|亲爱的|親愛的|老公|老婆|达令|達令|darling|honey|bab[ye]|小可爱|小可愛|亲亲|親親|么么|mua|my love/iu;
+
+/** Pure helper (exported for tests): is this an intimate nickname line? */
+export function isOwnerAffectionText(text) {
+  const value = String(text ?? '');
+  if (!value.trim()) return false;
+  return OWNER_AFFECTION_PATTERN.test(value);
+}
+
 
 function normalizeSpamText(text) {
   return String(text ?? '').replace(/\s+/gu, ' ').trim().toLowerCase().slice(0, 200);
@@ -962,6 +973,15 @@ export class QqHarnessBridge {
     const explicit = isQqMessageAddressed(message) || isNameMentioned(message, this.#nameMentionPattern);
     const senderId = message?.senderId;
     const now = Date.now();
+    // The owner calling someone an intimate nickname (宝宝/宝贝/亲爱的…) is a
+    // deliberate provocation: every bot answers and gets jealous, even when the
+    // message targets someone else.
+    const ownerAffection = isOwnerAffectionText(text)
+      && isOwnerSender(message, this.#ownerUserOpenid);
+    if (ownerAffection) {
+      this.#markEngaged(key, senderId);
+      return true;
+    }
     // Addressing someone else means the bot is no longer part of this thread.
     const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
     const mentionsSelf = mentions.some((mention) => mention?.is_you === true);
