@@ -119,6 +119,34 @@ const DEFAULT_FILE_UPLOAD_TIMEOUT_MS = 120_000;
 // How long a group conversation stays engaged after the bot is addressed.
 // Phrases that mean "I was not talking to you": drop engagement at once.
 const DISMISS_PATTERN = /没(?:有)?跟你(?:说|聊)|不是(?:在)?跟你(?:说|聊)|别插嘴|不要插嘴|没叫你|关你(?:什么|屁)事|(?:别|不要)接话/iu;
+// One short line when told to back off. Keep it varied — a single fixed sentence
+// ("行，那我先不打扰了。") reads robotic after the second time.
+export const DISMISS_ACKS = Object.freeze([
+  '行，不说了。',
+  '好，我闭嘴。',
+  '嗯，收到。',
+  '行吧，当没听见。',
+  '好，那你忙。',
+  '知道了，不插嘴。',
+  '行，我安静会儿。',
+  '好，不打扰你。',
+  '嗯，我潜水。',
+  '行，你说你的。',
+  '好，我退下。',
+  '嗯，那我看着。',
+  '行，不吵你。',
+  '好，我先忙别的。',
+  '知道了，收声。',
+  '行，那我不接话了。',
+]);
+let lastDismissAck = -1;
+/** Random acknowledgement, never the same one twice in a row. */
+export function pickDismissAck() {
+  const pool = DISMISS_ACKS.filter((_, index) => index !== lastDismissAck);
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  lastDismissAck = DISMISS_ACKS.indexOf(chosen);
+  return chosen;
+}
 const ENGAGEMENT_TTL_MS = Math.max(60_000, Number(process.env.DSH_IM_ENGAGE_TTL_MS ?? 10 * 60 * 1000) || 600_000);
 
 /**
@@ -1861,7 +1889,7 @@ export class QqHarnessBridge {
         this.#status.messagesReceived += 1;
         this.#status.lastMessageAt = new Date().toISOString();
       }
-      const ack = t('行，那我先不打扰了。');
+      const ack = pickDismissAck();
       await this.#bot.sendText(message.replyTarget, ack).catch(() => undefined);
       this.#status.messagesReplied += 1;
       this.#status.lastReplyAt = new Date().toISOString();
