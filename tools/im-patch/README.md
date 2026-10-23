@@ -567,3 +567,26 @@ GSV server 是**参考音驱动**的：`characters\<角色>.wav`（5~10 秒干�
 
 - 单个 bot 回滚：`node bot-profile.mjs remove <botId>`（删私有配置，回落到全局）；
 - 代码回滚：`backup\pre-apply-<时间戳>\` 里的旧文件拷回插件 `src/`，再 `node build-im.mjs`，重启 DSH。
+
+### 17.6 hiro（二阶堂希罗）音色落地记录（2026-10-23）
+
+环境都在 `D:\tools\gpt-sovits`（不在本仓库，换机要重做）：
+
+| 物件 | 值 |
+| --- | --- |
+| 参考音 | `characters\shiro.wav`（6.6s，由训练集 `0201Adv03_Hiro007.ogg` 转 32k 单声道） |
+| 参考文本 | `characters\shiro.txt` = `驚くことでもない。私と君はルームメイトになった。ただそれだけの話だ。` |
+| 参考语言 | `characters\shiro.lang` = `ja`（server.py 新增：prompt_lang 按 `<角色>.lang` 取，缺省 zh） |
+| 日语 G2P | venv 里装了 `pyopenjtalk-prebuilt`，并把完整 `open_jtalk_dic_utf_8-1.11` 解压进包目录（pip 包内那份 dic.tar.gz 是截断的；从 ghproxy 下 23MB 官方包才完整） |
+| 实例 | **17864** = 基础 v2 零样本（`tts_infer_hiro_base.yaml`），与 17862（大肥鱼微调）并存；实测两实例共占 5.9G/8G |
+| 开机启动 | `D:\tools\gpt-sovits\start-hiro-tts.bat` |
+
+实测同一句中文 `今天天气不错，我们出去走走吧。`：大肥鱼中位 f0 **263.4 Hz** / 希罗 **214.8 Hz**，音色确实不同。样本：`D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro}.wav`。
+
+**没做成的一步**：用户提供的 `hiro-e10.ckpt` + `hiro_e8_s2184.pth` 是 **v2ProPlus** 微调，本地代码支持该版本，但推理前会强制加载 `GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt`（说话人向量模型）。本地没有、HF 直连不通、hf-mirror 未探到该路径。拿到该 sv 文件后，用 `start-hiro-tts.bat D:\tools\gpt-sovits\tts_infer_hiro.yaml`（配置已写好：version v2ProPlus + 两个微调权重）即可从零样本升级为微调音色。
+
+**姐妹设定**：不写进人设卡（卡要可复用），写进两个 bot 的 `bot.json` 的 `note`，随 `<dsh_im_identity>` 注入：
+- yuri：`hiro（二阶堂希罗）是你亲姐姐；你是 yuri，hiro 的妹妹…`
+- hiro：`yuri（小鲸鱼）是你亲妹妹；你是 hiro（二阶堂希罗），yuri 的姐姐…`
+
+hiro 的别名最终为 `椎名 / 希罗 / 二阶堂希罗 / hiro`。
