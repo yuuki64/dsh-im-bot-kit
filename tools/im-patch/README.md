@@ -619,10 +619,11 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 
 ### 17.9 希罗人设卡 + 额外音色按需启动（2026-10-23）
 
-**人设卡**：主人提供 `C:\Users\yuuki\OneDrive\桌面\希罗人设卡.md`（二阶堂希罗，原作初期设定 + 防剧透规则）。安装方式：
-- `integrations\dsh-im\bots\qq_1a3b9ed…\persona.md`（该 bot 实际读取的文件）
-- `integrations\dsh-im\personas\希罗.md`（复用卡，以后别的 bot 可以 `bot-profile.mjs persona <botId> 希罗`）
-- 顶部加了一段 QQ 环境补充（回复保持 1~3 句、不复述设定、姐妹关系由身份块注入），原文其余部分未改；实测 5432 字符（persona.mjs 上限 12000）。
+**人设卡**：主人最初给的完整卡（`C:\Users\yuuki\OneDrive\桌面\希罗人设卡.md`）动作/心理描写多、回复偏长；2026-10-23 按主人要求换成**精简对话版**（约 900 字符）：
+- 安装位置：`integrations\dsh-im\bots\qq_1a3b9ed…\persona.md`；同时 `integrations\dsh-im\personas\希罗.md` 存一份可复用；
+- 卡首段硬约束：**只输出角色说的话**，不写动作/表情/心理/旁白、不用括号内心戏；一般 1~3 句、最多 5 句、不写小作文；
+- 保留：优等生 + 正义感 + 冷静有距离 + 责任感 + 一本正经的较真、原作初期防剧透、yuri 是妹妹；
+- 原长卡仍在 OneDrive 桌面，需要时可换回（`bot-profile.mjs persona <botId> …` 或直接覆盖文件，下一句消息即生效）。
 
 **额外音色按需启动**（主人要求：不在 QQ 用到就不占显存）：
 - 新增 `<GSV_ROOT>\instances.json` 注册表（端点 → 配置 yaml / 角色目录），加音色只是改数据；
