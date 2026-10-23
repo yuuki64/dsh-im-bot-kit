@@ -14,8 +14,11 @@ const HEALTH_TIMEOUT_MS = 1500;
 const SYNTH_TIMEOUT_MS = 180_000;
 const STARTUP_WAIT_MS = 120_000;
 
-export function gsvUrl() {
-  return (process.env.DSH_GSV_URL ?? DEFAULT_URL).replace(/\/+$/u, '');
+export function gsvUrl(endpoint) {
+  const raw = typeof endpoint === 'string' && endpoint.trim()
+    ? endpoint.trim()
+    : (process.env.DSH_GSV_URL ?? DEFAULT_URL);
+  return raw.replace(/\/+$/u, '');
 }
 
 export function gsvRoot() {
@@ -44,8 +47,8 @@ async function fetchJson(url, { timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
   }
 }
 
-export async function gsvHealth({ timeoutMs } = {}) {
-  return fetchJson(`${gsvUrl()}/health`, { timeoutMs });
+export async function gsvHealth({ timeoutMs, endpoint } = {}) {
+  return fetchJson(`${gsvUrl(endpoint)}/health`, { timeoutMs });
 }
 
 let starting = null;
@@ -99,14 +102,18 @@ export async function stopGsv() {
   }
 }
 
-export async function synthesizeGsvWav(text, { character = 'dafeiyu', speed = 1, language = 'zh' } = {}) {
+/**
+ * Synthesize with the GSV sidecar. `endpoint` lets one bot use a different
+ * server instance (e.g. a second one holding another character's model).
+ */
+export async function synthesizeGsvWav(text, { character = 'dafeiyu', speed = 1, language = 'zh', endpoint } = {}) {
   const say = typeof text === 'string' ? text.trim() : '';
   if (!say) throw new Error('Empty text');
-  await ensureGsv();
+  if (!endpoint) await ensureGsv();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SYNTH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${gsvUrl()}/tts`, {
+    const response = await fetch(`${gsvUrl(endpoint)}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({

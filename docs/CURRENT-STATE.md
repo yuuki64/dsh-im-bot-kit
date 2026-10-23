@@ -10,18 +10,18 @@
 本机跑的是 `@xmanrui/dsh-im` 5.2.0 + 22 个文件的本地补丁集（引用图片、QQ 语音、表情包、私聊/群聊双开关、群聊接续、人设注入、微信出站标签清理等）。产物 `lib/index.js` 由 `tools/im-patch/build-im.mjs` 重新打包；QQ 行为冻结，维护阶段没有新增 QQ 功能。
 
 <!-- dsh-im-status:begin -->
-<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T08:35:14.773Z；数字来自代码清单与实测，不要手改 -->
+<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-23T11:18:56.382Z；数字来自代码清单与实测，不要手改 -->
 
 | 项 | 实测值 |
 | --- | --- |
 | 上游版本 | @xmanrui/dsh-im 5.2.0（补丁集适配 5.2.0） |
-| 补丁文件数 | 22（由 tools/im-patch/manifest.mjs 生成） |
-| 构建基线 | adopt · 2026-10-22T15:28:41.533Z（证据来自本机权威目录，不在本副本内） |
-| 构建输入 | 341 个源文件 · sha256 826d9e84ada698a8… |
-| 产物 bundle | 9,096,703 B · sha256 55847287c8dea8c3… |
-| 核对结论 | `OK`（`node tools/im-patch/verify-build.mjs`） |
-| 运行实例 | 已确认：进程启动时间晚于产物 mtime，加载的就是该 bundle |
-| 通道开关 | 私聊=关 群聊=关 |
+| 补丁文件数 | 23（由 tools/im-patch/manifest.mjs 生成） |
+| 构建基线 | build · 2026-10-23T10:37:38.051Z（证据来自本机权威目录，不在本副本内） |
+| 构建输入 | 341 个源文件 · sha256 692420ab91408257… |
+| 产物 bundle | 9,099,617 B · sha256 e78fd53b7f18e29e… |
+| 核对结论 | `RUNTIME_NOT_RESTARTED`（`node tools/im-patch/verify-build.mjs`） |
+| 运行实例 | 尚未确认 |
+| 通道开关 | 私聊=开 群聊=开 |
 | 最后核验 | 2026-10-23 |
 
 <!-- dsh-im-status:end -->
@@ -93,6 +93,14 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 ## 已知本机运行期错误（未处理，记录备查）
 
 - 2026-10-23 13:57 出现一条 QQ 群状态写入失败：`STATE_WRITE_FAILED / EPERM`（`<DSH_HOME>\logs\dsh-im\2026-10-23.log`）。属于状态落盘权限问题，不影响本轮补丁一致性结论，但也**没有**在本轮修复。
+
+## 多机器人：每个 bot 独立的人设 / 唤醒词 / 音色（2026-10-23）
+
+- 目录约定：`<DSH_HOME>\integrations\dsh-im\bots\<botId>\` 放 `bot.json`（名字 + 别名 = 唤醒词 + 主人 openid）、`persona.md`、`voice.json`；**没有这个目录就走全局**，所以老机器人行为不变（yuri 就是走全局）。
+- 加新机器人：`node tools/im-patch/bot-profile.mjs init <botId> --name 名字 --aliases 名字,别名2 --persona <人设卡> --voice gsv --character <角色>`，然后 `node tools/im-patch/bot-profile.mjs check`。改配置不用重启。
+- 当前分布：`qq_9cc39e2…`（yuri）= 全局小鲸鱼人设 + `gsv/dafeiyu`；`qq_1a3b9ed…` = 名字「椎名」/别名「希罗、二阶堂希罗」，人设暂用 `傲娇助手` 卡，音色 `gsv/shiro`；`qq_a9a550…` = 未配置，走全局。
+- **未完成**：`D:\tools\gpt-sovits\characters\shiro.wav` / `shiro.txt` 还不存在，GSV 会回落到 dafeiyu 音色；`bot-profile.mjs check` 会一直报这条，补上参考音即生效（零样本，无需训练）。
+- 微信：仍只有全局人设/音色（微信通道没有多 bot 概念，本轮不动）。
 
 ## 权限边界（只读审计，2026-10-23）
 
