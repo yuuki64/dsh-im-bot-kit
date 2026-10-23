@@ -34,10 +34,30 @@
 ```powershell
 cd "<WORKSPACE>\tools\im-patch"
 node apply.mjs --check   # 先看缺什么
-node apply.mjs           # 复制 21 个文件 + 补 silk-wasm + 重新打包
+node apply.mjs           # 按 manifest.mjs 的清单复制补丁 + 补 silk-wasm + 重新打包
 ```
 
 然后完全退出 DSH 再打开。注意补丁集按 5.2.0 的文件内容制作，插件版本不是 5.2.0 时脚本会拒绝（`--force` 等于把那几个文件降级，不推荐）。
+
+## 当前状态与核对命令（唯一入口，2026-10-23 建立）
+
+**当前事实只看这三处，不要从下面各轮历史记录里反推现状**（那些是当时的实验与改动说明）：
+
+1. **状态文档**：`<WORKSPACE>\im-bot-kit\docs\CURRENT-STATE.md` —— 适配版本、权威位置、恢复入口、功能限制、已验证/未验证项、最后核验日期；
+2. **实测命令**（文件数/哈希都从 `manifest.mjs` 与构建清单生成，不在文档里手抄）：
+
+```powershell
+cd "<WORKSPACE>\tools\im-patch"
+node status.mjs                       # 在跑的是哪份源码/产物、通道开关、核对结论
+node verify-build.mjs                 # 四道门：补丁清单 / 源码已同步 / 产物已构建 / 进程已重启
+node verify-build.mjs --self-test     # 用临时副本跑负例，不碰生产目录
+node test-weixin-outbound-tags.mjs    # 微信出站标签清理回归（语音转文本、表情标签丢弃、只有标签不空投递）
+node build-im.mjs --adopt             # 旧安装没有清单时：先比哈希、只建基线，不覆盖产物
+```
+
+3. `verify-build.mjs` 退出码：`0` OK、`2` 版本不符、`3` 未建立基线、`4` 源码漂移、`5` 产物漂移、`6` 产物改了没重启、`7` 运行实例未确认、`8` 清单损坏、`9` 权威补丁被改。
+
+**构建证据的口径（别夸大）**：`build-manifest.json` 记录上游版本、补丁逐文件哈希、`plugin-src/host + src` 全树哈希、产物哈希、Node/esbuild 版本与锁文件哈希，能证明「源码 → 产物」；它**不**覆盖 profile 里以 external 方式留在产物外的运行期依赖，也**不**证明运行行为。运行时是否加载了这份产物，看 `进程已重启` 这道门（找监听开关页端口的进程，比启动时间与产物 mtime）。
 
 
 ---
@@ -455,3 +475,34 @@ IM 新会话在 DSH 侧栏落到「未分组」，而不是配置的 `bot-worksp
 2. 从 `apply.mjs` 的 `FILES` 删掉 `src_channels_shared_harness-client.mjs` 那行，标记数组里删掉 `registeredWorkspaceId`；
 3. `node apply.mjs`（重打包）+ 重启 DSH。
 只想回滚运行时也可以直接拷 `backup/pre-apply-<时间戳>/src_channels_shared_harness-client.mjs` 回插件 `src/` 再重打包。
+
+---
+
+## 16. 维护阶段（2026-10-23）：状态文档、镜像同步、构建证据、回归
+
+本轮**没有改运行时代码**（`backup/src-patched/` 内容未变，安装目录与产物 hash 未变），所以没有重新 apply/重启；改的是维护工具、文档与镜像副本。
+
+### 16.1 清单单源化（M1 配套）
+- 新增 `manifest.mjs`：上游版本 + 22 个补丁文件的唯一清单。`apply.mjs` / `build-im.mjs` / `verify-build.mjs` / `status.mjs` 全部从它取，文档不再手抄文件数。
+- 新增 `status.mjs`：一条命令看"现在跑的是哪份源码/产物 + 通道开关"，并能把实测数字写回 `docs/CURRENT-STATE.md` 的自动块（`--doc <md> --write`）。
+
+### 16.2 构建证据（M3）
+- `build-im.mjs` 现在写 `build-manifest.json`：上游版本与 package.json hash、补丁逐文件 hash、`plugin-src/host + src` **全树 hash**（341 个文件）、产物 hash/大小/mtime、Node/esbuild 版本、锁文件与原包 hash，并写明覆盖范围与不覆盖项。
+- 新增 `verify-build.mjs`：四道门 + 明确退出码（2 版本不符 / 3 未建立基线 / 4 源码漂移 / 5 产物漂移 / 6 改了没重启 / 7 运行实例未确认 / 8 清单损坏 / 9 权威补丁被改）。`--self-test` 用临时副本跑 10 个正负例。
+- 运行实例的证据：找**监听开关页端口（17863）的进程**，比它的启动时间与产物 mtime——启动晚于产物 mtime 才说明加载的是当前 bundle。
+- 旧安装没有清单时 `build-im.mjs --adopt` 先"打包到临时文件 + 比 hash"，一致才建立基线（`mode=adopt`），**不覆盖产物**。本轮实测：从当前源码打包结果与线上 `lib/index.js` 逐字节相同（sha256 `55847287…`，9,096,703 B）。
+
+### 16.3 镜像同步（M2）
+- 补回镜像缺失的微信出站标签清理：`weixin-bridge.mjs` 的 `sanitizeOutboundText()` + `#send` 里的调用与空文本提前返回（权威 58417 B / 镜像原 57403 B）。
+- 新增 `.gitattributes`（`* text=auto eol=lf`），并把仓库里 11 个 CRLF 文件归一为 LF——之前"镜像与权威有差异"里有 4 个纯换行差异，是 `core.autocrlf=true` 造成的假差异。
+- 新增 `scripts/check-mirror-sync.mjs`：按 `manifest.mjs` 清单逐项比字节，缺文件/内容差异/镜像多出文件 → 失败；只差换行 → 警告（`--strict-eol` 可升级为失败）；脱敏差异必须走显式 `REDACTIONS` 规则；另外检查 `git ls-files` 里没有 token、node_modules、聊天库、本机音频。`--self-test` 覆盖 7 个负例。
+
+### 16.4 回归（M4）
+- 新增 `test-weixin-outbound-tags.mjs`：从真实源码抽出 `sanitizeOutboundText` 求值后断言（不复制实现）——语音标签转普通文本、表情标签丢弃、普通文本保持、只有标签时不空投递，10 项。可以 `--file <path>` 指向任意副本，用来证明"镜像是真缺这段逻辑"。
+- 复用已有 `test-im-switch.mjs`、`test-workspace-grouping.mjs`（均离线、临时 DSH_HOME）。
+- 权限只读审计结论见 `docs/CURRENT-STATE.md`「权限边界」节：**部分隔离**——指令层有代码硬门，工具/会话权限层没有插件级隔离，群内审批可被发起者自批。
+
+### 16.5 本轮没有做的事
+- 没有升级插件版本（仍是 5.2.0），没有跨版本迁移。
+- 没有修复 `docs/CURRENT-STATE.md` 里记录的 R1～R6 权限风险（本轮是维护 + 只读审计，不扩成权限架构改造）。
+- 没有真机端到端验证（QQ 语音/引用图、微信标签清理的实际投递），需要主人指定测试会话与授权。
