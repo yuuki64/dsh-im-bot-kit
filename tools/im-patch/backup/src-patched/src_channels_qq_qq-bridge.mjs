@@ -256,6 +256,15 @@ function pendingMessageId(key, messageId) {
 
 const PENDING_RESTART_NOTICE = '排队中的消息在服务重启时被中断。为避免重复执行，未自动重放；如果该消息尚未处理，请重新发送。';
 
+/**
+ * A queued-message restart notice is fine in a 1:1 chat, but it must never show
+ * up in a group — members would see internal bookkeeping. Pure (exported for tests).
+ */
+export function shouldNotifyInterruptedPending(entry) {
+  if (!entry || entry.target === undefined || entry.target === null) return false;
+  return entry.kind !== 'group';
+}
+
 function helpText() {
   return [
     t('QQ 机器人已连接 DeepSeek Harness。'),
@@ -1439,11 +1448,20 @@ export class QqHarnessBridge {
   }
 
   async #notifyInterruptedPending(entry) {
-    if (entry.target === undefined || entry.target === null) {
-      this.#logger.warn?.(
-        '[dsh-im:qq] a queued message was interrupted by a restart but has no delivery target:',
-        entry.messageId,
-      );
+    if (!shouldNotifyInterruptedPending(entry)) {
+      if (entry.kind === 'group') {
+        this.#logger.warn?.(
+          '[dsh-im:qq] a queued group message was interrupted by a restart; staying silent:',
+          entry.messageId,
+        );
+      }
+      if (entry.target === undefined || entry.target === null) {
+        this.#logger.warn?.(
+          '[dsh-im:qq] a queued message was interrupted by a restart but has no delivery target:',
+          entry.messageId,
+        );
+        return;
+      }
       return;
     }
     try {
