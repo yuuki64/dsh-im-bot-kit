@@ -616,3 +616,18 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 - yuri 的别名补回 `大肥鱼`，保持原来的唤醒范围。
 
 回归：`node test-bot-wake.mjs`（17 项）——hiro 被 `hiro/椎名/希罗/二阶堂希罗/HIRO` 唤醒、不被 `yuri/小鲸鱼/大肥鱼` 误唤醒；yuri 反之；无 profile 的 bot 匹配器为 null。
+
+### 17.9 希罗人设卡 + 额外音色按需启动（2026-10-23）
+
+**人设卡**：主人提供 `C:\Users\yuuki\OneDrive\桌面\希罗人设卡.md`（二阶堂希罗，原作初期设定 + 防剧透规则）。安装方式：
+- `integrations\dsh-im\bots\qq_1a3b9ed…\persona.md`（该 bot 实际读取的文件）
+- `integrations\dsh-im\personas\希罗.md`（复用卡，以后别的 bot 可以 `bot-profile.mjs persona <botId> 希罗`）
+- 顶部加了一段 QQ 环境补充（回复保持 1~3 句、不复述设定、姐妹关系由身份块注入），原文其余部分未改；实测 5432 字符（persona.mjs 上限 12000）。
+
+**额外音色按需启动**（主人要求：不在 QQ 用到就不占显存）：
+- 新增 `<GSV_ROOT>\instances.json` 注册表（端点 → 配置 yaml / 角色目录），加音色只是改数据；
+- `gsv-tts.mjs` 新增 `ensureGsvEndpoint(endpoint)`：`/health` 不通时按注册表 `spawn` 对应端口的 server.py（detached），轮询到就绪；未注册端点返回 null，走原有失败回退；
+- `synthesizeGsvWav` 统一走 `ensureGsvEndpoint`（无 endpoint 时等价于原来的 `ensureGsv()`）；
+- `qq-bridge` 的 sidecar 预热**跳过带 endpoint 的 bot**，所以重启后不会预先拉起 17864。
+
+实测（先杀 17864）：调用 `ensureGsvEndpoint('http://127.0.0.1:17864')` → 25.8 秒后 `/health` 就绪，`synthesizeGsvWav(..., {endpoint})` 返回 125,484 B 的 `shiro` 音频。**现在 17864 是停止状态**，第一次在 QQ 里让它发语音时自动拉起（冷启动约 25~40 秒，含 CUDA 图编译）。

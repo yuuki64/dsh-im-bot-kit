@@ -4,7 +4,7 @@
 // model resident). Started on demand, detached and hidden.
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DEFAULT_URL = 'http://127.0.0.1:17862';
@@ -89,10 +89,87 @@ export async function ensureGsv() {
 }
 
 /**
- * Synthesize with GPT-SoVITS.
- * @returns {Promise<{wav: Buffer, character: string, seconds: number}>}
+ * Secondary sidecar endpoints (one bot per extra voice). The registry lives in
+ * `<GSV_ROOT>/instances.json`, so adding a voice is a data change, not code:
+ *
+ *   { "version": 1, "instances": {
+ *       "http://127.0.0.1:17864": { "config": "<tts_infer yaml>", "characters": "<dir>" }
+ *   } }
+ *
+ * Nothing is started until that voice is actually used in a chat.
  */
-/** Ask the sidecar to shut down (best effort). */
+export function instancesPath() {
+  return process.env.DSH_GSV_INSTANCES ?? join(gsvRoot(), 'instances.json');
+}
+
+function instanceConfig(endpoint) {
+  try {
+    const document = JSON.parse(readFileSync(instancesPath(), 'utf8'));
+    const entry = document?.instances?.[gsvUrl(endpoint)];
+    if (!entry || typeof entry.config !== 'string' || !entry.config.trim()) return null;
+    return {
+      config: entry.config.trim(),
+      characters: typeof entry.characters === 'string' ? entry.characters.trim() : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+const endpointStarting = new Map();
+
+/**
+ * Start (on demand) the sidecar that serves `endpoint`. Without an endpoint
+ * this is exactly `ensureGsv()` (the default 17862 voice). Returns the health
+ * payload, or null when the endpoint is not registered / failed to start.
+ */
+export async function ensureGsvEndpoint(endpoint) {
+  if (!endpoint) return ensureGsv();
+  if (!isGsvAvailable()) return null;
+  const base = gsvUrl(endpoint);
+  const health = await gsvHealth({ timeoutMs: 1200, endpoint: base });
+  if (health?.ok) return health;
+  const config = instanceConfig(base);
+  if (!config) return null;
+  const existing = endpointStarting.get(base);
+  if (existing) return existing;
+  const task = (async () => {
+    try {
+      let port = '80';
+      try {
+        port = new URL(base).port || '80';
+      } catch {
+        return null;
+      }
+      const env = {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PATH: `D:/tools/bin;${process.env.PATH ?? ''}`,
+        GSV_CONFIG: config.config,
+      };
+      if (config.characters) env.GSV_CHARACTERS = config.characters;
+      const child = spawn(PYTHON, [join(gsvRoot(), 'server.py'), '--port', port, '--preload'], {
+        cwd: gsvRoot(),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env,
+      });
+      child.unref();
+      const deadline = Date.now() + STARTUP_WAIT_MS;
+      while (Date.now() < deadline) {
+        const ready = await gsvHealth({ timeoutMs: 1200, endpoint: base });
+        if (ready?.ok) return ready;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      return null;
+    } finally {
+      endpointStarting.delete(base);
+    }
+  })();
+  endpointStarting.set(base, task);
+  return task;
+}
 export async function stopGsv() {
   try {
     await fetch(`${gsvUrl()}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(3000) });
@@ -109,7 +186,9 @@ export async function stopGsv() {
 export async function synthesizeGsvWav(text, { character = 'dafeiyu', speed = 1, language = 'zh', endpoint } = {}) {
   const say = typeof text === 'string' ? text.trim() : '';
   if (!say) throw new Error('Empty text');
-  if (!endpoint) await ensureGsv();
+  // A per-bot endpoint starts its own sidecar the first time that voice is
+  // used; the default voice keeps the original ensureGsv() behaviour.
+  await ensureGsvEndpoint(endpoint).catch(() => null);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SYNTH_TIMEOUT_MS);
   try {
