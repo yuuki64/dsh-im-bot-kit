@@ -102,7 +102,7 @@ import {
   VoiceError,
 } from '../shared/voice-synth.mjs';
 import { KOKORO_VOICES } from '../shared/kokoro-tts.mjs';
-import { applyPersona, listPersonas, usePersona } from '../shared/persona.mjs';
+import { applyPersona, listPersonas, readBotProfile, usePersona } from '../shared/persona.mjs';
 import { ensureGpuTts, gpuTtsAvailable, gpuTtsHealth, stopGpuTts } from '../shared/gpu-tts.mjs';
 import { ensureGsv, gsvHealth, isGsvAvailable, stopGsv } from '../shared/gsv-tts.mjs';
 import { pickSticker } from '../shared/sticker-library.mjs';
@@ -312,16 +312,40 @@ function safeText(message) {
 }
 
 // The bot answers to its own name in groups even without an @ mention.
-const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|deepseek|大肥鱼/iu;
+// Defaults keep yuri's behavior; a per-bot profile
+// (integrations/dsh-im/bots/<botId>/bot.json) overrides it with that bot's
+// name + aliases, so a second bot does not wake up on yuri's names.
+const DEFAULT_NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|deepseek|大肥鱼/iu;
 
-function isNameMentioned(message) {
+/** Wake-name matcher: ASCII names need word edges, CJK names match as substrings. */
+export function nameMentionPatternForNames(names) {
+  const list = Array.isArray(names)
+    ? names.filter((name) => typeof name === 'string' && name.trim())
+    : [];
+  if (!list.length) return null;
+  const parts = list.map((raw) => {
+    const name = raw.trim();
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    return /^[A-Za-z0-9_]+$/u.test(name)
+      ? `(?:^|[^A-Za-z0-9_])${escaped}(?:$|[^A-Za-z0-9_])`
+      : escaped;
+  });
+  try {
+    return new RegExp(parts.join('|'), 'iu');
+  } catch {
+    return null;
+  }
+}
+
+function isNameMentioned(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
+  if (!pattern) return false;
   const text = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
-  return NAME_MENTION_PATTERN.test(text);
+  return pattern.test(text);
 }
 
 /** A group/private message the bot should actually answer. */
-function isReplyTriggered(message) {
-  return isQqMessageAddressed(message) || isNameMentioned(message);
+function isReplyTriggered(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
+  return isQqMessageAddressed(message) || isNameMentioned(message, pattern);
 }
 
 function attachmentMediaType(attachment) {
@@ -677,6 +701,8 @@ export function createQqBridgeStatus() {
 export class QqHarnessBridge {
   #bot;
   #botId;
+  // Wake names for this bot: its own profile's name + aliases, else yuri's defaults.
+  #nameMentionPattern = DEFAULT_NAME_MENTION_PATTERN;
   #ownerUserOpenid;
   #harness;
   #state;
@@ -742,6 +768,12 @@ export class QqHarnessBridge {
     // Without a botId the bridge keeps the legacy global persona + voice.json.
     this.#botId = typeof botId === 'string' && /^[A-Za-z0-9_-]{1,80}$/u.test(botId.trim())
       ? botId.trim() : '';
+    const profile = readBotProfile(this.#botId);
+    // A bot with an id but without a profile must NOT inherit yuri's names
+    // (two bots answering "yuri" would be wrong); it only answers to @ then.
+    this.#nameMentionPattern = this.#botId
+      ? nameMentionPatternForNames(profile ? [profile.name, ...profile.aliases] : [])
+      : DEFAULT_NAME_MENTION_PATTERN;
     this.#ownerUserOpenid = ownerUserOpenid;
     this.#harness = harness;
     this.#state = state;
@@ -820,7 +852,7 @@ export class QqHarnessBridge {
   /** Should this message be answered? Several senders can be engaged at once. */
   #shouldReply(message, key) {
     const text = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
-    const explicit = isQqMessageAddressed(message) || NAME_MENTION_PATTERN.test(text);
+    const explicit = isQqMessageAddressed(message) || isNameMentioned(message, this.#nameMentionPattern);
     const senderId = message?.senderId;
     const now = Date.now();
     // Addressing someone else means the bot is no longer part of this thread.
@@ -898,7 +930,7 @@ export class QqHarnessBridge {
     // Other bots: only answer when they clearly address us and the throttle
     // allows it, so two bots cannot loop forever.
     const explicitAddress = isQqMessageAddressed(message)
-      || NAME_MENTION_PATTERN.test(`${message?.content ?? ''}\n${message?.raw?.content ?? ''}`);
+      || isNameMentioned(message, this.#nameMentionPattern);
     if (message.senderIsBot === true && !explicitAddress && !this.#isEngaged(message, key)) {
       return Promise.resolve();
     }
@@ -1819,7 +1851,7 @@ export class QqHarnessBridge {
     };
     // Someone telling us to back off gets one short acknowledgement, then silence.
     const dismissText = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
-    if (DISMISS_PATTERN.test(dismissText) && !NAME_MENTION_PATTERN.test(dismissText)) {
+    if (DISMISS_PATTERN.test(dismissText) && !this.#nameMentionPattern?.test(dismissText)) {
       this.#engageMapDelete(key, message?.senderId);
       if (!alreadyRecorded) {
         await this.#state.markSeen(messageId);
