@@ -115,6 +115,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - **机器人互相接话（2026-10-23 放宽）**：节流 15 秒/8 次 → **3 秒/20 次（每 5 分钟）**；AGENTS.md 新增「被另一个机器人点名必须回一句」。回归 `node tools/im-patch/test-bot-reply-throttle.mjs`。
 - **暧昧称呼全员吃醋（2026-10-23）**：主人发「宝宝/宝贝/亲爱的/老公/老婆/达令/小可爱」等词时，即使没点名、@ 的是别人，两个 bot 都会接话并吃醋（提示词约束 1~2 句）；非主人发不触发。回归 `node tools/im-patch/test-owner-affection.mjs`。
 - **STATE_WRITE_FAILED / EPERM（2026-10-23 修）**：`state.json` 落盘是 `.tmp` + `rename`，Windows 上目标被杀毒/索引短暂占用时 rename 抛 EPERM，导致整条回复失败（INTERNAL_UNKNOWN）。现改为 `writeSnapshotAtomically()`：锁类错误退避重试 6 次，仍失败退化为直接覆盖；非锁错误照常抛出。manifest 增至 25 个文件。回归 `node tools/im-patch/test-state-write-retry.mjs`。
+- **叫停识别 + 真静默（2026-10-23）**：`DISMISS_PATTERN` 放宽到「没/不是+在+跟你俩/和你说」和「别说话了」；模型可用 `<dsh_im_silent/>` 表示不说话（插件直接跳过，不再把「（此处不回复）」发出去）。回归 `node tools/im-patch/test-dismiss-silence.mjs`。
 - **回复长度（2026-10-23）**：`AGENTS.md` 与两个 bot 的 note 都写了「回复要短、不说小作文」；默认 1~3 句，私聊最多 5 句。
 
 ## 权限边界（只读审计，2026-10-23）
