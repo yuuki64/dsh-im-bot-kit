@@ -669,3 +669,16 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 - 提示可用源块里的 senderName 对照，但以 openid 为准
 
 两个 bot 都已设 `ownerName: yuuki`；回归 `test-bot-profiles.mjs` 增加「主人称呼注入」断言。
+### 17.15 修「推理等级还是 high」：改用 Host 模型 API（2026-10-23）
+
+原因：17.7 的实现用 `session.executeCommand('/reasoning low')`。`/reasoning` 是**插件层命令**（`model-command.mjs`），Host 不认这个 slash，所以调用失败被我 catch 掉，会话一直停在模型默认档（GUI 显示 High）。
+
+修复（`workspace-session.mjs`）：`ensureReasoningDefault()` 改成走 Host 模型 API——
+1. `session.models()` 读当前 provider/model 与可选等级；
+2. 目标档不在列表里 → `unsupported`，保持原样（不乱设未知值）；
+3. 已经是目标档 → `already`；
+4. 否则 `session.selectModel({ provider, model, reasoningEffort })`，并校验返回值。
+
+每会话每进程只应用一次（进程内 `/reasoning` 改过的保持）。回归：`node test-reasoning-default.mjs`（5 项：high→low、只应用一次、已低则跳过、不支持则不动、无 API 安全跳过）。
+
+**注意**：这只影响 IM 触发的会话；DSH Web GUI 里你自己开的会话，推理等级由右下角模型选择器决定，插件不碰。

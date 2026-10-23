@@ -14,20 +14,43 @@ const reasoningDefaultsApplied = new Set();
 /**
  * Best-effort: put the session on the default (cheapest) reasoning tier.
  * Group conversations honour the owner-set ceiling from `/effort`; direct
- * conversations always default to `low`. Never throws: a host without the
- * `/reasoning` command just keeps its own default.
+ * conversations always default to `low`.
+ *
+ * Uses the Host's model API (models → selectModel) rather than a `/reasoning`
+ * slash command: that command is implemented by the IM layer, not the Host, so
+ * sending it through executeCommand() fails and silently leaves the session on
+ * its original tier.
+ *
+ * Never throws, and never changes an unknown/unsupported tier.
+ * @returns {Promise<'applied'|'already'|'unsupported'|'failed'|'skipped'>}
  */
-async function ensureReasoningDefault(session, sessionId, conversationKey, options) {
-  if (!sessionId || reasoningDefaultsApplied.has(sessionId)) return;
-  if (typeof session?.executeCommand !== 'function') return;
+export async function ensureReasoningDefault(session, sessionId, conversationKey, options) {
+  if (!sessionId || reasoningDefaultsApplied.has(sessionId)) return 'skipped';
+  if (typeof session?.models !== 'function' || typeof session?.selectModel !== 'function') return 'skipped';
   reasoningDefaultsApplied.add(sessionId);
   const ceiling = typeof conversationKey === 'string' && conversationKey.startsWith('group:')
     ? await readGroupReasoningCeiling().catch(() => 'low')
     : 'low';
+  const callOptions = options ?? {};
   try {
-    await session.executeCommand(`/reasoning ${ceiling}`, options ?? {});
+    const catalog = await session.models(callOptions);
+    const current = catalog?.current;
+    if (!current?.provider || !current?.model) return 'failed';
+    const model = (catalog?.groups ?? [])
+      .find((group) => group?.id === current.provider)
+      ?.models?.find((entry) => entry?.id === current.model);
+    const efforts = model?.reasoning?.efforts ?? [];
+    if (!efforts.some((effort) => effort?.id === ceiling)) return 'unsupported';
+    if (current.reasoningEffort === ceiling) return 'already';
+    const selected = await session.selectModel({
+      provider: current.provider,
+      model: current.model,
+      reasoningEffort: ceiling,
+    }, callOptions);
+    return selected?.selected?.reasoningEffort === ceiling ? 'applied' : 'failed';
   } catch (error) {
     console.warn('[dsh-im] unable to set the default reasoning tier:', error?.message ?? error);
+    return 'failed';
   }
 }
 
