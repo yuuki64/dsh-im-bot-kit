@@ -147,6 +147,40 @@ export function pickDismissAck() {
   lastDismissAck = DISMISS_ACKS.indexOf(chosen);
   return chosen;
 }
+
+// Non-owner spam guard: repeating the same line (or flooding) gets silence.
+// The owner is exempt — they may repeat commands on purpose.
+const SPAM_WINDOW_MS = 10 * 60 * 1000;
+const SPAM_REPEAT_FAST_MS = 2 * 60 * 1000;
+const SPAM_FLOOD_PER_MINUTE = 8;
+const SPAM_HISTORY_MAX = 40;
+
+function normalizeSpamText(text) {
+  return String(text ?? '').replace(/\s+/gu, ' ').trim().toLowerCase().slice(0, 200);
+}
+
+/**
+ * Pure decision helper (exported for tests): should this message be ignored as
+ * spam, given the sender's previous messages in this conversation?
+ * @returns {{ignore: boolean, history: {text: string, at: number}[]}}
+ */
+export function spamCheck(history, text, now = Date.now()) {
+  const kept = (Array.isArray(history) ? history : [])
+    .filter((entry) => entry && typeof entry.text === 'string' && now - entry.at < SPAM_WINDOW_MS)
+    .slice(-SPAM_HISTORY_MAX);
+  const same = kept.filter((entry) => entry.text === text);
+  const lastSame = same[same.length - 1];
+  const recentMinute = kept.filter((entry) => now - entry.at < 60_000).length;
+  let ignore = false;
+  if (text) {
+    // Second identical line within two minutes, or a third one in the window.
+    if (lastSame && now - lastSame.at < SPAM_REPEAT_FAST_MS) ignore = true;
+    else if (same.length >= 2) ignore = true;
+  }
+  if (recentMinute >= SPAM_FLOOD_PER_MINUTE) ignore = true;
+  kept.push({ text, at: now });
+  return { ignore, history: kept.slice(-SPAM_HISTORY_MAX) };
+}
 const ENGAGEMENT_TTL_MS = Math.max(60_000, Number(process.env.DSH_IM_ENGAGE_TTL_MS ?? 10 * 60 * 1000) || 600_000);
 
 /**
@@ -767,6 +801,8 @@ export class QqHarnessBridge {
   #lastSpeaker = new Map();
   // Bot-to-bot replies: throttled per conversation to avoid loops.
   #botReplies = new Map();
+  // Non-owner spam guard: per (conversation, sender) recent lines.
+  #spamHistory = new Map();
 
   constructor({
     bot,
@@ -878,6 +914,24 @@ export class QqHarnessBridge {
         await stopGsv();
       }
     }).catch(() => undefined);
+  }
+
+  /** True when this message should be ignored as non-owner spam. */
+  #shouldIgnoreSpam(message, key) {
+    if (process.env.DSH_IM_SPAM_GUARD === '0') return false;
+    if (message?.senderIsBot === true) return false;
+    if (isOwnerSender(message, this.#ownerUserOpenid)) return false;
+    const senderId = nonEmptyString(message?.senderId);
+    if (!senderId) return false;
+    const mapKey = `${key}\u0000${senderId}`;
+    const text = normalizeSpamText(`${message?.content ?? ''}\n${message?.raw?.content ?? ''}`);
+    const { ignore, history } = spamCheck(this.#spamHistory.get(mapKey), text);
+    this.#spamHistory.set(mapKey, history);
+    while (this.#spamHistory.size > 500) this.#spamHistory.delete(this.#spamHistory.keys().next().value);
+    if (ignore) {
+      this.#logger.info?.('[dsh-im:qq] ignoring repeated non-owner message', { senderId });
+    }
+    return ignore;
   }
 
   /** Should this message be answered? Several senders can be engaged at once. */
@@ -1893,6 +1947,11 @@ export class QqHarnessBridge {
       await this.#bot.sendText(message.replyTarget, ack).catch(() => undefined);
       this.#status.messagesReplied += 1;
       this.#status.lastReplyAt = new Date().toISOString();
+      return;
+    }
+    // Non-owner spam: repeating the same line, or flooding, gets silence.
+    if (this.#shouldIgnoreSpam(message, key)) {
+      await markMessageSeen().catch(() => undefined);
       return;
     }
     if (!this.#shouldReply(message, key)) return;
