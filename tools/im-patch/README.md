@@ -569,7 +569,6 @@ GSV server 是**参考音驱动**的：`characters\<角色>.wav`（5~10 秒干�
 - 代码回滚：`backup\pre-apply-<时间戳>\` 里的旧文件拷回插件 `src/`，再 `node build-im.mjs`，重启 DSH。
 
 ### 17.6 hiro（二阶堂希罗）音色落地记录（2026-10-23）
-
 环境都在 `D:\tools\gpt-sovits`（不在本仓库，换机要重做）：
 
 | 物件 | 值 |
@@ -591,3 +590,10 @@ GSV server 是**参考音驱动**的：`characters\<角色>.wav`（5~10 秒干�
 - hiro：`yuri（小鲸鱼）是你亲妹妹；你是 hiro（二阶堂希罗），yuri 的姐姐…`
 
 hiro 的别名最终为 `椎名 / 希罗 / 二阶堂希罗 / hiro`。
+
+### 17.7 推理等级默认 low + 回复不说小作文（2026-10-23）
+
+- **推理默认 low**：新增进补丁集的 `channels/shared/workspace-session.mjs` 在会话绑定后、发 prompt 前执行一次 `/reasoning <ceiling>`——私聊固定 `low`，群聊用 `/effort` 设的上限（默认也是 `low`）。每进程每会话只应用一次，主人之后用 `/reasoning` 改过的会话在本进程内保持；重启后所有会话（含已存在的）首条消息都会重新落回 low。
+  群聊原有的模型级 clamp（`bot-workspace-store.mjs` 的 `clampGroupModelSelection`）保持不变。
+- **回复要短**：`<DSH_HOME>\AGENTS.md` 新增「所有 IM 机器人回复都要短（不说小作文）」，两个 bot 的 `bot.json` note 也写了「回复一律简短，不说小作文」，两层约束。
+- 补丁集 23 → **24 个文件**。生效需要重启 DSH。
