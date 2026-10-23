@@ -506,3 +506,64 @@ IM 新会话在 DSH 侧栏落到「未分组」，而不是配置的 `bot-worksp
 - 没有升级插件版本（仍是 5.2.0），没有跨版本迁移。
 - 没有修复 `docs/CURRENT-STATE.md` 里记录的 R1～R6 权限风险（本轮是维护 + 只读审计，不扩成权限架构改造）。
 - 没有真机端到端验证（QQ 语音/引用图、微信标签清理的实际投递），需要主人指定测试会话与授权。
+
+---
+
+## 17. 多机器人：每个 bot 独立的人设 / 唤醒词 / 音色（2026-10-23）
+
+目标：以后加任意 QQ 机器人，只给它配三样东西（唤醒词、人设、音色），其余功能照旧，不用改代码。
+
+### 17.1 数据布局（缺失就走全局，所以老机器人行为不变）
+
+```
+<DSH_HOME>\integrations\dsh-im\
+  persona.md                全局人设（yuri 现在用这个）
+  voice.json                全局音色（yuri=gsv/dafeiyu）
+  personas\<卡名>.md         人设卡库（可被任何 bot 复用）
+  bots\<botId>\
+    bot.json                名字 + 别名（唤醒词）+ ownerOpenid + 备注
+    persona.md              这个 bot 的人设（从 personas\ 复制后自行改）
+    voice.json              这个 bot 的音色（结构同全局，额外支持 endpoint）
+```
+
+解析规则（`persona.mjs` / `voice-synth.mjs`）：
+- 人设：`bots\<botId>\persona.md` → 否则全局 `persona.md`；
+- 音色：`bots\<botId>\voice.json` → 否则全局 `voice.json`；
+- 身份：`bots\<botId>\bot.json` 的 `name`/`aliases`/`ownerOpenid` 以 `<dsh_im_identity>` 块注入 guidance（放在人设之前，人设仍可覆盖措辞）。
+- 没有 `bots\<botId>\` 目录 = 完全走旧路径（yuri 就是这种，行为零变化）。
+
+### 17.2 加一个机器人的完整流程
+
+```powershell
+cd "<WORKSPACE>\tools\im-patch"
+node bot-profile.mjs list                      # 看现有 bot 及各自来源
+node bot-profile.mjs init <botId> --name 名字 --aliases 名字,别名2,别名3 --persona <人设卡> --voice gsv --character <角色>
+node bot-profile.mjs check                     # 检查人设/唤醒词/音色是否齐全（含 GSV 参考音）
+```
+
+`init` 会自动从 `integrations\dsh-qq\config.json` 带出该 bot 的 `ownerUserOpenid`（每个 appId 下 openid 不同，别手抄）。
+改配置**不需要重启**：插件每条消息重新读文件。
+
+### 17.3 音色（GSV 零样本）
+
+GSV server 是**参考音驱动**的：`characters\<角色>.wav`（5~10 秒干净人声）+ `characters\<角色>.txt`（对应文本）。
+- 补上这两个文件，`voice.json` 里 `character` 指过去就行，**不用训练**；
+- 当前 17862 上是「大肥鱼」微调模型（yuri 在用）。要另一个角色的音色更稳，建议**单独再起一个 GSV 实例**（例如 17864，用基础 v2 配置），并在该 bot 的 `voice.json` 里写 `"endpoint": "http://127.0.0.1:17864"`（本次已支持 per-bot endpoint）；
+- 显存只有 8G，两个实例是否同时常驻要实测；跑不动就按 bot 轮换（用到哪个起哪个）。
+
+### 17.4 代码改动（补丁集 23 个文件）
+
+| 文件 | 改动 |
+| --- | --- |
+| `channels/shared/persona.mjs` | 按 botId 解析人设；注入 `<dsh_im_identity>`（名字/别名/owner openid）；`usePersona(name, {botId})` |
+| `channels/shared/voice-synth.mjs` | `voiceSettingsPath(botId)` / `readVoiceSettings({botId})` / `writeVoiceSettings(patch,{botId})`；新增可选 `endpoint` |
+| `channels/shared/gsv-tts.mjs` | `gsvUrl(endpoint)`、`synthesizeGsvWav(..., {endpoint})` 支持 per-bot 实例 |
+| `channels/qq/qq-bridge.mjs` | 构造参数 `botId`；人设、`/voice` 读写、两处语音合成、sidecar 预热都带上 botId |
+| `channels/qq/qq-runtime.mjs` | **新增进补丁集**：把 `config.botId` 传给 bridge |
+
+配套（不在插件里）：`bot-profile.mjs`（配置 CLI）、`test-bot-profiles.mjs`（15 项离线回归，用临时 DSH_HOME + 真实插件模块）。
+
+### 17.5 回滚
+
+- 单个 bot 回滚：`node bot-profile.mjs remove <botId>`（删私有配置，回落到全局）；
+- 代码回滚：`backup\pre-apply-<时间戳>\` 里的旧文件拷回插件 `src/`，再 `node build-im.mjs`，重启 DSH。
