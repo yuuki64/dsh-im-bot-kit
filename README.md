@@ -10,11 +10,13 @@
 
 > 文中 `<DSH_HOME>`（= `C:\Users\<你>\.dsh`）/ `<WORKSPACE>` / `<BOT_WORKSPACE>` / `<TOOLS>`（语音与模型目录，如 `D:\tools`）/ `<QQ_DATA>` / `<DESKTOP>` 为路径占位符，按本机实际路径替换。
 
-## 接手必读（新会话 / 换机器，先看这三条）
+## 接手必读（新会话 / 换机器，先看这三条 + 一个入口）
 
 1. **权威副本在本地，不在 GitHub**：真正生效的是 `<WORKSPACE>\tools\im-patch` + 已安装插件；本仓库只是镜像，可能落后。排障一律以本地为准。
 2. **改完必须重新打包 + 重启 DSH**：`node tools/im-patch/apply.mjs`（或 `build-im.mjs`）→ 完全退出 DSH 再打开。重启前不要说“已生效”。
 3. **推送要代理、token 只放本地**：本机直连 `github.com` 常失败，用 `node scripts/push-with-token.mjs`（自动探测本地代理、从 `.github-token` 读 token、用完把 remote 还原成纯 URL、输出脱敏）。
+
+**当前状态唯一入口：[docs/CURRENT-STATE.md](docs/CURRENT-STATE.md)** —— 适配版本、权威位置、构建/恢复入口、功能限制、已验证与未验证项、最后核验日期。里面的版本号与文件数由 `node tools/im-patch/status.mjs --doc docs/CURRENT-STATE.md --write` 从代码清单与实测生成，不要手改；`tools/im-patch/README.md` 是各轮改动的时间线记录，**不代表现状**。
 
 新会话不想交代背景，直接把 [docs/NEW-SESSION.md](docs/NEW-SESSION.md) 里的开场白粘过去，末尾补一句任务即可。
 
@@ -22,9 +24,13 @@
 
 ```text
 tools/im-patch/          插件补丁集
-  build-im.mjs           esbuild 重新打包 lib/index.js
-  apply.mjs              把 backup/src-patched 还原进已安装插件并重建
-  backup/src-patched/    修改后的插件源码（21 个文件）
+  manifest.mjs           唯一清单：上游版本 + 补丁文件列表（改清单只改这里）
+  build-im.mjs           esbuild 重新打包 lib/index.js，并写 build-manifest.json 构建证据
+  apply.mjs              按清单把 backup/src-patched 还原进已安装插件并重建
+  verify-build.mjs       四道门核对：补丁清单 / 源码已同步 / 产物已构建 / 进程已重启
+  status.mjs             一条命令看当前状态，并生成 CURRENT-STATE.md 的自动数字块
+  test-weixin-outbound-tags.mjs 微信出站标签清理回归（语音转文本、表情丢弃、不空投递）
+  backup/src-patched/    修改后的插件源码（22 个文件，清单见 manifest.mjs）
   im-pause.mjs           全局暂停/恢复 IM（paused 标记，断开所有通道）
   im-switch.mjs          私聊/群聊双开关命令行（和点击页面共用 switches.json）
   test-im-switch.mjs     双开关离线自测
@@ -40,9 +46,11 @@ configs/
   stickers.example.json  表情库目录配置样例
   persona.example.md     当前生效人设
   personas/              人设卡（傲娇助手 / 小鲸鱼 / 说明）
+docs/CURRENT-STATE.md    当前状态唯一入口（事实，不是历史）
 docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
 docs/NEW-SESSION.md      新会话开场白（复制即用，接手本项目）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
+scripts/check-mirror-sync.mjs 只读核对「镜像 == 本机权威补丁目录」（带 --self-test 负例）
 scripts/push-with-token.mjs 带 token + 本地代理推送（token 放 .github-token，不进 git 配置）
 ```
 
@@ -90,6 +98,18 @@ pwsh scripts/rebuild.ps1
 ## 维护
 
 完整流程见 [docs/MAINTENANCE.md](docs/MAINTENANCE.md)：插件升级后重新打补丁、语音服务启停与重训、配置项、日志位置、常见故障排查、备份与回滚。
+
+日常核对（都可离线跑，不碰生产目录，不改开关状态）：
+
+```powershell
+node tools/im-patch/status.mjs                    # 现在跑的是哪份源码/产物、通道开关
+node tools/im-patch/verify-build.mjs              # 补丁清单 / 源码已同步 / 产物已构建 / 进程已重启（带退出码）
+node tools/im-patch/verify-build.mjs --self-test  # 用临时副本验证"缺清单、版本不符、源码/产物漂移、没重启"都能准确失败
+node tools/im-patch/test-weixin-outbound-tags.mjs # 微信出站标签清理回归
+node scripts/check-mirror-sync.mjs                # 镜像是否与本机权威补丁目录逐字节一致
+```
+
+同步方向是单向的：**权威 → 镜像**。镜像只作副本，不要反向覆盖更完整的权威源码；差异逐项说明，不用"整文件忽略"消除告警。
 
 ## 免责声明
 
