@@ -111,6 +111,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - **非主人刷屏静默（2026-10-23）**：2 分钟内重复同一句、10 分钟内第 3 次、或 1 分钟超 8 条，直接不回（主人不受限）；DSH_IM_SPAM_GUARD=0 可临时关闭。回归 `node tools/im-patch/test-spam-guard.mjs`。
 - **表情包频率（2026-10-23 调整）**：从每 2~4 条一张下调到 **平均每 15~20 条**带一张。- **群消息投递差异（2026-10-23 实测，平台限制）**：老群（`353D504C…`）会把群内全部消息推给机器人，名字唤醒可用；新群（`38123AF7…`）只推 @ 到机器人的消息，非 @ 的「椎名」根本到不了插件（椎名侧只收到 1 条 @ 消息，对比老群 75 条）。新群要让它回就得每次 @，或由群主给该机器人开「接收群消息」权限。
 - **已知运行期错误（未修）**：`STATE_WRITE_FAILED / EPERM` 偶发（22:24、22:28 各一次，scope=group），状态落盘失败；目前未影响回复，但会在会话绑定环节埋隐患。- **主人称呼注入（2026-10-23）**：`bot.json` 的 `ownerName`（当前两个 bot 都是 yuuki）会随身份块注入——「主人是 yuuki，openid …」，并写明 senderId 判定方法与称呼（yuuki／主人）。修复椎名问「还没告诉我该怎么称呼」。
+- **推理默认 low（2026-10-23 修）**：之前用 `session.executeCommand('/reasoning low')`，该命令是插件层的、Host 不认，静默失败所以 GUI 仍显示 High。现改为 Host 模型 API（`session.models()` → `session.selectModel({reasoningEffort})`），不支持 low 的模型保持原样；每会话每进程一次。回归 `node tools/im-patch/test-reasoning-default.mjs`。GUI 里你自己开的会话不受影响。
 - **回复长度（2026-10-23）**：`AGENTS.md` 与两个 bot 的 note 都写了「回复要短、不说小作文」；默认 1~3 句，私聊最多 5 句。
 
 ## 权限边界（只读审计，2026-10-23）
