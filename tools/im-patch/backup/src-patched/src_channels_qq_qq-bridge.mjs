@@ -155,6 +155,28 @@ const SPAM_REPEAT_FAST_MS = 2 * 60 * 1000;
 const SPAM_FLOOD_PER_MINUTE = 8;
 const SPAM_HISTORY_MAX = 40;
 
+// Bot-to-bot replies: still bounded (two bots must not ping-pong forever), but
+// loose enough to feel natural — the owner asked the sisters to answer each
+// other instead of leaving a line hanging.
+const BOT_REPLY_MIN_MS = Math.max(500, Number(process.env.DSH_IM_BOT_REPLY_MIN_MS ?? 3000) || 3000);
+const BOT_REPLY_WINDOW_MS = 5 * 60 * 1000;
+const BOT_REPLY_MAX = Math.max(1, Number(process.env.DSH_IM_BOT_REPLY_MAX ?? 20) || 20);
+
+/**
+ * Pure decision helper (exported for tests): may the bot answer another bot now?
+ * @returns {{allowed: boolean, history: number[]}}
+ */
+export function botReplyAllowed(history, now = Date.now()) {
+  const kept = (Array.isArray(history) ? history : [])
+    .filter((ts) => typeof ts === 'number' && now - ts < BOT_REPLY_WINDOW_MS);
+  const last = kept[kept.length - 1];
+  if (last !== undefined && now - last < BOT_REPLY_MIN_MS) return { allowed: false, history: kept };
+  if (kept.length >= BOT_REPLY_MAX) return { allowed: false, history: kept };
+  kept.push(now);
+  return { allowed: true, history: kept };
+}
+
+
 function normalizeSpamText(text) {
   return String(text ?? '').replace(/\s+/gu, ' ').trim().toLowerCase().slice(0, 200);
 }
@@ -988,18 +1010,16 @@ export class QqHarnessBridge {
     return true;
   }
 
-  /** Throttle replies to other bots: at most one per 15 s, 8 per 5 min. */
+  /**
+   * Throttle replies to other bots. Still bounded so two bots cannot ping-pong
+   * forever, but loose enough to feel natural: at most one per 3 s and 20 per
+   * 5 min (owner asked the sisters to actually answer each other).
+   */
   #allowBotReply(message, key) {
     if (message?.senderIsBot !== true) return true;
-    const now = Date.now();
-    const windowMs = 5 * 60 * 1000;
-    const history = (this.#botReplies.get(key) ?? []).filter((ts) => now - ts < windowMs);
-    const last = history[history.length - 1];
-    if (last && now - last < 15_000) return false;
-    if (history.length >= 8) return false;
-    history.push(now);
+    const { allowed, history } = botReplyAllowed(this.#botReplies.get(key));
     this.#botReplies.set(key, history);
-    return true;
+    return allowed;
   }
 
   #accept(message) {
