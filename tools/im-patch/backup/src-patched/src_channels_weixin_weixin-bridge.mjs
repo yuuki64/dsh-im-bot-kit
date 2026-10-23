@@ -134,6 +134,26 @@ function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// Weixin's iLink API has no voice message support, and this channel does not
+// synthesize voice: `<dsh_im_voice>` / `<dsh_im_sticker>` markers must never
+// reach the wire as literal text. Keep the voice body as plain text, drop the
+// sticker marker (the sticker library is a QQ-only path here), and strip any
+// leftover inline marker.
+const WEIXIN_VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/giu;
+const WEIXIN_STICKER_TAG_PATTERN = /<dsh_im_sticker>[\s\S]*?<\/dsh_im_sticker>/giu;
+const WEIXIN_INLINE_TAG_PATTERN = /<\/?dsh_im_[a-z_]+>/giu;
+
+function sanitizeOutboundText(text) {
+  if (typeof text !== 'string' || !text.includes('<dsh_im_')) return text;
+  return text
+    .replace(WEIXIN_VOICE_TAG_PATTERN, (_match, inner) => String(inner ?? '').trim())
+    .replace(WEIXIN_STICKER_TAG_PATTERN, '')
+    .replace(WEIXIN_INLINE_TAG_PATTERN, '')
+    .replace(/[ \t]+\n/gu, '\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim();
+}
+
 function safeDiagnosticToken(value) {
   const token = value === undefined || value === null ? '' : String(value).trim();
   return /^-?[A-Za-z0-9_.:-]{1,160}$/u.test(token) ? token : '-';
@@ -1344,6 +1364,8 @@ export class WeixinHarnessBridge {
   }
 
   async #send(toUserId, text, contextToken, runId, { stopTyping = true } = {}) {
+    text = sanitizeOutboundText(text);
+    if (!text) return [];
     if (stopTyping) await this.#stopTyping();
     contextToken ??= this.#state.contextTokenFor?.(toUserId);
     const providerMessageIds = [];
