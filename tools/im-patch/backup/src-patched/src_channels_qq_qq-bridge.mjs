@@ -840,7 +840,10 @@ export class QqHarnessBridge {
     void readVoiceSettings({ botId: this.#botId }).then(async (settings) => {
       // Only keep the sidecar for the active provider resident in VRAM.
       if (settings.provider === 'gsv') {
-        await ensureGsv();
+        // Per-bot endpoints (e.g. a second voice on another port) stay stopped
+        // until that voice is actually used in a chat, so an unused bot does
+        // not hold VRAM after a restart.
+        if (!settings.endpoint) await ensureGsv();
         await stopGpuTts();
       } else if (settings.provider === 'f5') {
         await ensureGpuTts();
