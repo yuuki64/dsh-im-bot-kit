@@ -118,7 +118,12 @@ function interactionResolvedText() {
 const DEFAULT_FILE_UPLOAD_TIMEOUT_MS = 120_000;
 // How long a group conversation stays engaged after the bot is addressed.
 // Phrases that mean "I was not talking to you": drop engagement at once.
-const DISMISS_PATTERN = /没(?:有)?跟你(?:说|聊)|不是(?:在)?跟你(?:说|聊)|别插嘴|不要插嘴|没叫你|关你(?:什么|屁)事|(?:别|不要)接话/iu;
+const DISMISS_PATTERN = /(?:没|不是)(?:有)?(?:在)?(?:跟|和|与)你(?:俩|两|俩个|们)?(?:说|聊)|(?:别|不要)说话了?|别插嘴|不要插嘴|没叫你|关你(?:什么|屁)事|(?:别|不要)接话/iu;
+
+/** Pure helper (exported for tests): does this line tell the bot to back off? */
+export function isDismissText(text) {
+  return DISMISS_PATTERN.test(String(text ?? ''));
+}
 // One short line when told to back off. Keep it varied — a single fixed sentence
 // ("行，那我先不打扰了。") reads robotic after the second time.
 export const DISMISS_ACKS = Object.freeze([
@@ -320,12 +325,17 @@ function quotedImageName(name, index) {
 
 const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/iu;
 const STICKER_TAG_PATTERN = /<dsh_im_sticker>([\s\S]*?)<\/dsh_im_sticker>/iu;
+// "I have nothing to say" — the model emits this instead of writing a meta line
+// such as "（此处不回复）", which used to be sent to the chat verbatim.
+const SILENT_TAG_PATTERN = /<dsh_im_silent\s*\/?>(?:\s*<\/dsh_im_silent>)?/giu;
+const SILENT_TAG_TEST = /<dsh_im_silent\s*\/?>/iu;
+const SILENT_TEXT_PATTERN = /^[（(【\[]\s*(?:此处)?不回复\s*[）)】\]]$/u;
 
 /**
  * Split a final answer into user-facing text plus optional spoken line and
  * sticker request. Tags are stripped regardless of order.
  */
-function extractMediaIntent(text) {
+export function extractMediaIntent(text) {
   const raw = typeof text === 'string' ? text : '';
   let rest = raw;
   let voiceText = null;
@@ -340,10 +350,15 @@ function extractMediaIntent(text) {
     stickerQuery = stickerMatch[1].trim();
     rest = rest.slice(0, stickerMatch.index) + rest.slice(stickerMatch.index + stickerMatch[0].length);
   }
+  const hadSilentTag = SILENT_TAG_TEST.test(rest);
+  rest = rest.replace(SILENT_TAG_PATTERN, '');
+  const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
+  const silent = trimmed === '' ? hadSilentTag : SILENT_TEXT_PATTERN.test(trimmed);
   return {
-    text: rest.replace(/\n{3,}/gu, '\n\n').trim(),
+    text: silent ? '' : trimmed,
     voiceText,
     stickerQuery,
+    silent,
   };
 }
 
@@ -2162,6 +2177,10 @@ export class QqHarnessBridge {
       // plugin turns those into a real QQ voice message and a sticker image.
       // Any sender may ask for either; the tags never reach the user.
       const mediaIntent = extractMediaIntent(answerText);
+      if (mediaIntent.silent && !mediaIntent.voiceText && !mediaIntent.stickerQuery) {
+        this.#logger.info?.('[dsh-im:qq] model chose silence');
+        return;
+      }
       const textAnswer = mediaIntent.text;
       const displayAnswer = toolErrors.length > 0
         ? `${textAnswer}\n\n---\n\n${toolErrors.join('\n\n')}`.trim()
