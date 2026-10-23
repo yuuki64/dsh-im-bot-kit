@@ -99,8 +99,8 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - 目录约定：`<DSH_HOME>\integrations\dsh-im\bots\<botId>\` 放 `bot.json`（名字 + 别名 = 唤醒词 + 主人 openid）、`persona.md`、`voice.json`；**没有这个目录就走全局**，所以老机器人行为不变（yuri 就是走全局）。
 - 加新机器人：`node tools/im-patch/bot-profile.mjs init <botId> --name 名字 --aliases 名字,别名2 --persona <人设卡> --voice gsv --character <角色>`，然后 `node tools/im-patch/bot-profile.mjs check`。改配置不用重启。
 - 当前分布：`qq_9cc39e2…`（yuri）= 全局小鲸鱼人设 + `gsv/dafeiyu`，别名 yuri/小鲸鱼/DeepSeek；`qq_1a3b9ed…` = 名字「椎名」/别名 椎名、希罗、二阶堂希罗、**hiro**，人设暂用 `傲娇助手` 卡，音色 `gsv/shiro`（**endpoint http://127.0.0.1:17864**）；`qq_a9a550…` = 未配置，走全局。
-- **希罗音色现状**：17864 = 基础 v2 零样本（日语参考音 + 中文回复），与 17862（大肥鱼微调）并存；实测同句中位 f0 大肥鱼 263.4 Hz / 希罗 214.8 Hz，样本 `D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro}.wav`。重启后用 `D:\tools\gpt-sovits\start-hiro-tts.bat` 拉起（首次推理有几十秒 CUDA 图编译）。
-- **未完成**：用户给的 v2ProPlus 微调权重需要 `pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt`（说话人向量模型），本地缺、HF 不通，所以还没升级成微调音色；拿到该文件后改用 `tts_infer_hiro.yaml` 启动即可。
+- **希罗音色现状**：17864 跑 **v2ProPlus 微调**（用户提供的 `hiro-e10.ckpt` + `hiro_e8_s2184.pth`，依赖 sv 说话人模型已补齐），与 17862（大肥鱼微调）并存。实测同句中位 f0：大肥鱼 263.4 Hz / 希罗微调 207.8 Hz；微调实例 15 字约 2.8 秒。样本 `D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro-finetuned}.wav`。重启后用 `D:\tools\gpt-sovits\start-hiro-tts.bat` 拉起（首次推理有几十秒 CUDA 图编译）。
+- **未完成**：无（v2ProPlus 微调已接通）；如需换参考音/重训，数据集仍在 `C:\Users\yuuki\OneDrive\桌面\hiro`。
 - **姐妹关系**：写在两个 bot 的 `bot.json` 的 `note` 里（随 `<dsh_im_identity>` 注入），不写进人设卡——yuri 知道 hiro 是亲姐姐，hiro 知道 yuri 是亲妹妹。
 - 微信：仍只有全局人设/音色（微信通道没有多 bot 概念，本轮不动）。
 
