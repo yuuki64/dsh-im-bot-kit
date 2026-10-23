@@ -725,3 +725,10 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 - 新增静默标记：`<dsh_im_silent/>` 和 `[不回复]` / `【不回复】` / `（此处不回复）` / `(不回复)`，`extractMediaIntent()` 识别后返回 `silent: true`，投递阶段直接跳过（日志 `model chose silence`），一个字都不发；
 - `AGENTS.md` 写明：不想说话时只输出 `<dsh_im_silent/>`，不要写「（此处不回复）」。
 - 回归：`node test-dismiss-silence.mjs`（24 项）。
+### 17.20 重启提示不再发进群（2026-10-23）
+
+现象：DSH 重启后，椎名在群里发「排队中的消息在服务重启时被中断。为避免重复执行，未自动重放…」。这是插件的内部提示（`PENDING_RESTART_NOTICE`），群里所有人都会看到，很出戏。
+
+原因：`#recoverPendingMessages()` 对「已提交但没跑完」的队列消息会调 `#notifyInterruptedPending(entry)`，原来不区分会话类型，有投递目标就直接发。
+
+修复：新增纯函数 `shouldNotifyInterruptedPending(entry)`——**群聊一律不发**（只写一条 warn 日志），**私聊保留**（只有主人看得到，提示重新发送是有用的）。回归：`node test-pending-notice.mjs`（5 项）。
