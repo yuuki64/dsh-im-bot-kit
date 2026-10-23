@@ -682,3 +682,13 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 每会话每进程只应用一次（进程内 `/reasoning` 改过的保持）。回归：`node test-reasoning-default.mjs`（5 项：high→low、只应用一次、已低则跳过、不支持则不动、无 API 安全跳过）。
 
 **注意**：这只影响 IM 触发的会话；DSH Web GUI 里你自己开的会话，推理等级由右下角模型选择器决定，插件不碰。
+### 17.16 放宽机器人互相接话（2026-10-23，主人要求）
+
+现象：椎名点名 yuri（「yuri，别以为没人看着就能乱来」），yuri 不接。原因两层：
+1. 代码层节流太紧：另一个机器人的消息，**15 秒才允许回 1 次、5 分钟最多 8 次**；
+2. 提示词层：AGENTS 有「别人互相怼时别抢话、不确定就不回」，模型可能判断这句不用接。
+
+改法：
+- 节流放宽为 **3 秒 1 次 / 5 分钟 20 次**（`botReplyAllowed()` 纯函数，可用 `DSH_IM_BOT_REPLY_MIN_MS` / `DSH_IM_BOT_REPLY_MAX` 覆盖），仍然防止两个机器人无限对刷；
+- `AGENTS.md` 新增：**被另一个机器人点名必须回一句**（1~2 句就收）。
+- 回归：`node test-bot-reply-throttle.mjs`（6 项）。
