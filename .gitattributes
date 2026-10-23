@@ -1,0 +1,8 @@
+# 统一用 LF 存储，避免 Windows 上 core.autocrlf=true 让工作区变成 CRLF，
+# 进而和本机权威补丁目录（LF）比字节时出现"假差异"。
+* text=auto eol=lf
+
+# 上游原包/测试音频是二进制，别让 git 误判
+*.tgz binary
+*.wav binary
+*.silk binary
