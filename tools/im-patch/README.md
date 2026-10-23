@@ -578,12 +578,13 @@ GSV server 是**参考音驱动**的：`characters\<角色>.wav`（5~10 秒干�
 | 参考文本 | `characters\shiro.txt` = `驚くことでもない。私と君はルームメイトになった。ただそれだけの話だ。` |
 | 参考语言 | `characters\shiro.lang` = `ja`（server.py 新增：prompt_lang 按 `<角色>.lang` 取，缺省 zh） |
 | 日语 G2P | venv 里装了 `pyopenjtalk-prebuilt`，并把完整 `open_jtalk_dic_utf_8-1.11` 解压进包目录（pip 包内那份 dic.tar.gz 是截断的；从 ghproxy 下 23MB 官方包才完整） |
-| 实例 | **17864** = 基础 v2 零样本（`tts_infer_hiro_base.yaml`），与 17862（大肥鱼微调）并存；实测两实例共占 5.9G/8G |
-| 开机启动 | `D:\tools\gpt-sovits\start-hiro-tts.bat` |
+| 实例 | **17864** = **v2ProPlus 微调**（`tts_infer_hiro.yaml` = `hiro-e10.ckpt` + `hiro_e8_s2184.pth`），与 17862（大肥鱼微调）并存 |
+| v2ProPlus 依赖 | `GPT_SoVITS\pretrained_models\sv\pretrained_eres2netv2w24s4ep4.ckpt`（107.5 MB，2026-10-23 从 HF `lj1995/GPT-SoVITS` 经代理下载） |
+| 开机启动 | `D:\tools\gpt-sovits\start-hiro-tts.bat`（默认微调配置；传 `tts_infer_hiro_base.yaml` 可退回零样本） |
 
-实测同一句中文 `今天天气不错，我们出去走走吧。`：大肥鱼中位 f0 **263.4 Hz** / 希罗 **214.8 Hz**，音色确实不同。样本：`D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro}.wav`。
+实测同一句中文 `今天天气不错，我们出去走走吧。`：大肥鱼中位 f0 **263.4 Hz** / 希罗零样本 **214.8 Hz** / 希罗微调 **207.8 Hz**。微调实例第二次起合成 15 字约 **2.8 秒**。样本：`D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro,hiro-finetuned}.wav`、`hiro-pro-sample.wav`。
 
-**没做成的一步**：用户提供的 `hiro-e10.ckpt` + `hiro_e8_s2184.pth` 是 **v2ProPlus** 微调，本地代码支持该版本，但推理前会强制加载 `GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt`（说话人向量模型）。本地没有、HF 直连不通、hf-mirror 未探到该路径。拿到该 sv 文件后，用 `start-hiro-tts.bat D:\tools\gpt-sovits\tts_infer_hiro.yaml`（配置已写好：version v2ProPlus + 两个微调权重）即可从零样本升级为微调音色。
+**没做成的一步（2026-10-23 21:52 已解决）**：v2ProPlus 微调需要 `sv/pretrained_eres2netv2w24s4ep4.ckpt`。用户挂代理后从 HF 下到 107.5 MB 文件放进 `pretrained_models\sv\`，`tts_infer_hiro.yaml` 直接加载成功（`engine ready … v=v2ProPlus`；日志里的 `enc_q.*` missing_keys 是训练用的后验编码器，推理不需要，属正常）。17864 现在跑的就是微调音色。
 
 **姐妹设定**：不写进人设卡（卡要可复用），写进两个 bot 的 `bot.json` 的 `note`，随 `<dsh_im_identity>` 注入：
 - yuri：`hiro（二阶堂希罗）是你亲姐姐；你是 yuri，hiro 的妹妹…`
