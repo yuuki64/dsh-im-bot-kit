@@ -549,6 +549,57 @@ export function isClosingMessage(text) {
   return CLOSING_PATTERN.test(String(text ?? '').trim());
 }
 
+/**
+ * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
+ * 其他机器人标「(机器人)」。导出纯函数便于测试。
+ */
+/**
+ * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
+ * 其他机器人标「(机器人)」。当前这条用「▶」标出，并**同时带上它之后已经到达的消息**
+ * （连发/排队时，回复要考虑后续几句）。导出纯函数便于测试。
+ */
+export function formatChatDigest(entries, {
+  now = Date.now(), minutes = 15, limit = 25, maxChars = 40, excludeMessageId = null,
+  current = null, limitBefore = 8, limitAfter = 5,
+} = {}) {
+  const windowMs = Math.max(1, Number(minutes) || 15) * 60_000;
+  const width = Math.max(8, Number(maxChars) || 40);
+  const maxBefore = Math.max(1, Number(limitBefore) || 8);
+  const maxAfter = Math.max(1, Number(limitAfter) || 5);
+  const all = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && (excludeMessageId === null || entry.messageId !== excludeMessageId))
+    .filter((entry) => now - (Number(entry.at) || 0) <= windowMs);
+  const lineOf = (entry) => {
+    if (entry.isSelf === true) {
+      return `你: ${String(entry.text ?? '').replace(/\s+/gu, ' ').slice(0, width)}`;
+    }
+    const base = entry.senderName || entry.senderId || '某人';
+    const name = entry.senderIsBot === true ? `${base}(机器人)` : base;
+    return `${name}: ${String(entry.text ?? '').replace(/\s+/gu, ' ').slice(0, width)}`;
+  };
+  // 找到当前这条在列表里的位置（找不到就用 current.at 切分）。
+  const currentId = current?.messageId ?? null;
+  const currentAt = Number(current?.at) || 0;
+  let splitIndex = currentId ? all.findIndex((entry) => entry.messageId === currentId) : -1;
+  if (splitIndex < 0) {
+    if (currentAt > 0) {
+      splitIndex = all.findIndex((entry) => (Number(entry.at) || 0) > currentAt);
+      if (splitIndex < 0) splitIndex = all.length;
+    } else {
+      // 合并消息（#coalesced）不在缓存里：把它当作最新一条，历史都在它之前。
+      splitIndex = all.length;
+    }
+  }
+  const before = all.slice(0, splitIndex).slice(-maxBefore);
+  const after = all.slice(splitIndex + (currentId ? 1 : 0)).slice(0, maxAfter);
+  const currentLine = current
+    ? `▶ ${lineOf({ ...current, isSelf: current.isSelf === true })}`
+    : null;
+  const lines = [...before.map(lineOf), ...(currentLine ? [currentLine] : []), ...after.map(lineOf)];
+  if (lines.length < 2) return '';
+  return `【最近群聊（按时间顺序，▶ 是当前正在回复的这条）】\n${lines.join('\n')}`;
+}
+
 /** 当前是否在免打扰时段（导出便于测试）；支持跨午夜。 */
 export function inQuietHours(now, hours) {
   const start = Number(hours?.start);
@@ -1556,19 +1607,39 @@ export class QqHarnessBridge {
   /**
    * 本地补丁（2026-10-24）：把最近几条群聊压成一段上下文，帮助模型判断
    * 「这句话是在回谁」——QQ 的引用/回复信息不一定能拿到，只能靠群聊顺序推断。
+   * 包含机器人自己发过的话（标成「你」），否则模型会误判别人在跟谁说话。
    */
-  #recentChatBlock(key, currentMessageId) {
-    const now = Date.now();
-    const entries = (this.#recentChat.get(key) ?? [])
-      .filter((entry) => entry.messageId !== currentMessageId)
-      .filter((entry) => now - entry.at <= 15 * 60 * 1000)
-      .slice(-25);
-    if (entries.length < 2) return '';
-    const lines = entries.map((entry) => {
-      const name = entry.senderIsBot ? `${entry.senderName}(机器人)` : entry.senderName;
-      return `${name}: ${entry.text.replace(/\s+/gu, ' ').slice(0, 40)}`;
+  #recentChatBlock(key, message) {
+    const messageId = message?.messageId ?? null;
+    return formatChatDigest(this.#recentChat.get(key) ?? [], {
+      now: Date.now(),
+      minutes: 15,
+      maxChars: 40,
+      current: {
+        messageId,
+        at: Number(message?.__receivedAt) || 0,
+        senderName: message?.senderName || message?.senderId || '当前消息',
+        senderIsBot: message?.senderIsBot === true,
+        text: safeText(message),
+      },
     });
-    return `【最近群聊（按时间顺序）】\n${lines.join('\n')}`;
+  }
+
+  /** 本地补丁：把机器人自己刚发出的话记进最近群聊（显示为「你」）。 */
+  #rememberOwnChat(key, text) {
+    const value = String(text ?? '').trim();
+    if (!value) return;
+    const now = Date.now();
+    const list = this.#recentChat.get(key) ?? [];
+    list.push({
+      senderId: this.#botId,
+      senderName: this.#selfNames[0] || '我',
+      senderIsBot: false,
+      isSelf: true,
+      text: value,
+      at: now,
+    });
+    this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
   }
 
   /** 本地补丁：记录机器人自己发过的文字（用于判断有人引用/回复它）。 */
@@ -2941,7 +3012,7 @@ export class QqHarnessBridge {
       // 本地补丁（2026-10-24）：注入最近群聊，帮助模型判断「这句话在回谁」。
       // QQ 的引用/回复不一定拿得到，群聊顺序往往才是可靠线索。
       if (message.kind === 'group') {
-        const chatBlock = this.#recentChatBlock(key, messageId);
+        const chatBlock = this.#recentChatBlock(key, message);
         if (chatBlock) {
           text = `${chatBlock}\n\n${text}`;
           if (Array.isArray(content)) content = [{ type: 'text', text: chatBlock }, ...content];
@@ -3170,8 +3241,10 @@ export class QqHarnessBridge {
               }
               : {}),
           });
-          // 本地补丁：记住自己发过的话，之后有人引用它就能识别为「在回复我」。
+          // 本地补丁：记住自己发过的话，之后有人引用它就能识别为「在回复我」；
+          // 同时记进最近群聊，让下一轮能看见「刚才是我说的」。
           this.#rememberBotText(key, displayAnswer);
+          if (message.kind === 'group') this.#rememberOwnChat(key, displayAnswer);
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
