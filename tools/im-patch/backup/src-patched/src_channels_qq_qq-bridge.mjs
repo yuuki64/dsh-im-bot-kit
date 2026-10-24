@@ -346,6 +346,8 @@ function quotedImageName(name, index) {
 // 每条标签发一条语音（插件不合并、不改字）。
 const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/giu;
 const MAX_VOICE_MESSAGES = 3;
+// 本地补丁（2026-10-24）：被激将/被反复怼的常见说法 → 给模型加一句「这次优先用语音」的提示。
+const PROVOKE_PATTERN = /(?:这也不生气|不生气|没生气|生气了|你急了|急了|破防|绷不住|就这|阴阳|怼你|骂你|你敢|敢不敢|这也能忍|气死|服了|别怂|认怂)/u;
 const STICKER_TAG_PATTERN = /<dsh_im_sticker>([\s\S]*?)<\/dsh_im_sticker>/iu;
 // 本地补丁：AI 看到群里的表情图后，给自动收藏补标签 / 判定不合人设就拒收。
 const STICKER_TAG_ACTION = /<dsh_im_sticker_tag>([\s\S]*?)<\/dsh_im_sticker_tag>/giu;
@@ -2326,6 +2328,15 @@ export class QqHarnessBridge {
           || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准。想接就正常回一两句，不要提这条提示。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+      }
+      // 本地补丁：被激将/被怼时提示模型这次优先用语音（连发 1~2 条），别只发文字。
+      if (!watchMode) {
+        const provokeText = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
+        if (PROVOKE_PATTERN.test(provokeText)) {
+          const instruction = '对方在激你/怼你。按你的人设，这次**优先用语音回应**：输出 1~2 个 <dsh_im_voice>短句</dsh_im_voice>（可以再补一句很短文字），不要只用文字顶回去。';
+          text = `${text}\n\n[系统提示] ${instruction}`;
+          if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        }
       }
       // QQ stream_messages can acknowledge a final frame without rendering it in
       // some C2C clients. Standard Markdown delivery is the reliable reply path.
