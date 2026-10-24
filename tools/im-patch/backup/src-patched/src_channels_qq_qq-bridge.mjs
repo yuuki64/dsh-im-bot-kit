@@ -532,6 +532,16 @@ const PROMPT_TALK_PATTERN = /(?:提示词|提示词里|系统提示|人设卡|�
 const CLOSING_PATTERN = /^(?:那|好|行|我)?\s*(?:晚安|晚安啦|睡了|去睡了|先睡了|不聊了|先这样|下了|我下了|撤了|先撤了|拜拜|白白|88|回头聊|溜了|滚去睡)/u;
 const WHY_COMMAND_PATTERN = /^\/(?:why|为什么)(?:\s+(\d{1,2}))?$/iu;
 
+/**
+ * 本地补丁（2026-10-24）：模型内容可能是 string，也可能是 [{type:'text',...}] 结构化数组，
+ * 追加系统提示时必须分别处理，否则数组会被模板字符串拼成 "[object Object]".
+ */
+export function appendPromptPart(content, part) {
+  if (Array.isArray(content)) return [...content, { type: 'text', text: part }];
+  if (typeof content === 'string') return `${content}${part}`;
+  return content;
+}
+
 /** 是否收尾语（导出便于测试）。 */
 export function isClosingMessage(text) {
   return CLOSING_PATTERN.test(String(text ?? '').trim());
@@ -2718,6 +2728,10 @@ export class QqHarnessBridge {
       let contextEnhanced = false;
       if (snapshot) {
         const originalContent = content ?? text;
+        if (typeof originalContent !== 'string') {
+          // Structured/quote content: enhancement would stringify the parts.
+          content = originalContent;
+        } else {
         content = enhanceContextContent(originalContent, snapshot, () => ({
           channel: 'qq',
           senderId: sender,
@@ -2725,6 +2739,7 @@ export class QqHarnessBridge {
           chatId: message.kind === 'group' ? message.groupOpenid : message.senderId,
         }));
         contextEnhanced = content !== originalContent;
+        }
       }
       // 本地补丁：watch 模式告诉模型「这条没人叫你，自己决定接不接」。
       if (watchMode) {
@@ -2742,20 +2757,20 @@ export class QqHarnessBridge {
             : '';
         const instruction = `${baseInstruction}${ownerExtra}`;
         text = `${text}\n\n[系统提示] ${instruction}`;
-        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // 本地补丁：引用/回复消息——让模型判断引用的是不是它自己。
       if (watchMode && qqReplyReference(message)) {
         const quotedMe = this.#quotedMyMessage(message, key);
         const instruction = `这条是引用/回复消息${quotedMe ? '，而且引用的内容是你自己说过的话' : ''}：判断引用之后这句话是不是在跟你说话。是就正常回；如果只是引用了别人的话、内容不是在跟你说，就只输出 <dsh_im_silent/>。`;
         text = `${text}\n\n[系统提示] ${instruction}`;
-        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // 本地补丁：复读接龙——跟着大家玩梗，接一句很短的。
       if (repeatMode) {
         const instruction = '群里几个人在复读同一条消息，大家在玩梗：你跟上接一句很短的话（可以直接复读、+1、或者一句简短吐槽），不要长篇、不要解释、不要提这条提示。';
         text = `${text}\n\n[系统提示] ${instruction}`;
-        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // 本地补丁：被激将/被怼时提示模型这次优先用语音（连发 1~2 条），别只发文字。
       if (!watchMode) {
@@ -2763,20 +2778,20 @@ export class QqHarnessBridge {
         if (PROVOKE_PATTERN.test(provokeText)) {
           const instruction = '对方在激你/怼你。按你的人设，这次**优先用语音回应**：输出 1~2 个 <dsh_im_voice>短句</dsh_im_voice>（可以再补一句很短文字），不要只用文字顶回去。';
           text = `${text}\n\n[系统提示] ${instruction}`;
-          if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+          content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
         }
       }
       // 本地补丁：真正被点名（名字/@）时，不让模型用「不抢话」当理由沉默。
       if (!watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
         const instruction = '【点名】这条消息明确叫到了你（名字/@你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
         text = `${text}\n\n[系统提示] ${instruction}`;
-        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // 本地补丁：接话窗口续聊——每条都做一次轻量判断，聊完/转向别人就别硬接。
       if (engagedTurn && !watchMode && !repeatMode) {
         const instruction = '这条来自刚才在跟你聊天的人（接话窗口）。先轻量判断：如果对方已经转向别人、在跟别人说、或明显收尾，就只输出 <dsh_im_silent/>；如果还在跟你聊，就正常接。';
         text = `${text}\n\n[系统提示] ${instruction}`;
-        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // QQ stream_messages can acknowledge a final frame without rendering it in
       // some C2C clients. Standard Markdown delivery is the reliable reply path.
