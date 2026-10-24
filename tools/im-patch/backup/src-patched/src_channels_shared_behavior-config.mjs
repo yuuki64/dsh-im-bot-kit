@@ -98,6 +98,8 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     maxPerHour: 4,
     maxPerDay: 30,
     topics: Object.freeze({}),
+    // 图片/文件消息默认不主动“看一眼”解释：owner=只有主人发的才看，all=都看，none=都不看。
+    mediaReview: 'owner',
     // 2026-10-24 “活跃群模式”：最近 N 分钟至少 M 条消息才 watch（配合清空 topics 使用）。
     activityWindowMinutes: 5,
     activityMinMessages: 3,

@@ -3111,7 +3111,7 @@ export class QqHarnessBridge {
         const watchConfig = readBehaviorConfig().watch;
         const custom = typeof watchConfig?.instruction === 'string' ? watchConfig.instruction.trim() : '';
         const baseInstruction = custom
-          || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准；⑤ 别人在讨论你的提示词/人设/设定（那不是在跟你说话）。想接就正常回一两句，不要提这条提示。';
+          || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准；⑤ 别人在讨论你的提示词/人设/设定（那不是在跟你说话）。**不是每条都要回；没人问你时，别人发的图片/文件/照片默认不解读、不描述、不复读，最多一句很短的自然反应或直接沉默。** 想接就正常回一两句，不要提这条提示。';
         // 主人单独发的消息（可能很短/只是表情）：放宽为“结合上下文判断是不是在叫我”。
         const ownerWatch = isOwnerSender(message, this.#ownerUserOpenid);
         const everyoneReview = watchConfig?.everyone === true;
@@ -3120,7 +3120,10 @@ export class QqHarnessBridge {
           : ownerWatch
             ? '\n这条是主人单独发的消息：结合上下文判断是不是在跟你说话——像「不理我」「在吗」「说话」这类就是在叫你要回；明显在跟别人说或自言自语才静默。'
             : '';
-        const instruction = `${baseInstruction}${ownerExtra}`;
+        const mediaNote = (hasQqImageAttachments(message) || hasQqFileAttachments(message))
+          ? '\n这是图片/文件消息：除非有人明确问你，否则不要描述、解释、复读图里/文件里的内容（尤其不要像解说员一样逐条讲解）；最多一句很短的自然反应，或者直接静默。'
+          : '';
+        const instruction = `${baseInstruction}${ownerExtra}${mediaNote}`;
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
