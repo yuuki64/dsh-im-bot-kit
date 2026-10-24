@@ -951,3 +951,18 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 **回滚**：配置类全部热生效——把 `behavior.json` 里 `watch.enabled` 改 `false`（或整段恢复备份）即可，不用重启；备份在 `tools/im-patch/backup/behavior.json.bak-2026-10-24-before-watch-lively`。代码层若需回退，按 git 历史 revert 后重新 apply+重启。
 
 **回归**：`test-media-intent.mjs` 增补复读检测 3 项（第三人命中/单人不算/过期不算）；17 个测试全绿。**代码改动需重启一次 DSH。**
+
+### 18.17 引用机器人算点名 + 主人图片也能触发（2026-10-24 第十三轮）
+
+**事故**：群友 WuKino 引用 yuri 自己的话「他就发个表情，我接啥」说「人家发表情你就回张表情呗」——明显在对 yuri 说话，但 yuri 没回；另外主人发的「大肥鱼照片」也没回。
+
+**原因**：
+1. 「不抢话」守卫写的是「非主人 + 带引用 → 不接」，**没区分引用的是谁**，于是引用机器人自己也被误杀；
+2. watch 的 `textOnly: true` 会跳过所有图片/文件；`minChars: 8` 又会挡住短文字；活跃群门槛还要求 3 条消息——主人单发一张图永远进不了 AI。
+
+**修复**：
+- 新增 `#botTexts`（每会话最近 60 分钟自己的 20 条文字）+ `matchesOwnText()` 纯函数：**引用的内容是自己说过的 → 视为点名**（`explicit=true`），不再被不抢话守卫拦掉；每次发文字后 `#rememberBotText()` 记录。
+- watch 增加 **owner media bypass**：主人发的图片即使没文字也进入“看一眼”（跳过 `textOnly`/`minChars`/活跃群门槛），让视觉模型自己判断要不要接。普通群友的图片/文件仍然跳过。
+- 局限：`#botTexts` 是内存态，**重启前发过的消息被引用时认不出来**（重启后新发的可以）。
+
+**回归**：`test-media-intent.mjs` 增补引用匹配 3 项（原文命中/标点不同命中/别人内容不命中）；17 个测试全绿。**代码改动需重启一次 DSH。**
