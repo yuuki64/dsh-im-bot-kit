@@ -883,3 +883,21 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - 判定提示仍是严格版：只有明显在叫你/回复你/直接与你有关才接，其余只输出 `<dsh_im_silent/>`。
 - 实现：`#allowWatch()` 增加 `topics` 与 mentions-other 过滤、日限速；`behavior-config.mjs` 默认值同步（`minIntervalMs 60000 / maxPerHour 4 / maxPerDay 30 / topics {}`）。
 - 生活示例：群友说「那么我要吃鲸鱼片」→ 直接唤醒 yuri（连发前会按人设接）；群友说「今天聊到鲸鱼」→ 落入 watch 看一眼，AI 觉得不相关就不回。
+
+### 18.13 主动消息只发一个群 / 私聊收不到（2026-10-24 第九轮）
+
+**现象**：yuri 的「该吃饭了」只在 1 个群出现；私聊没有；椎名一条都没有。
+
+**原因**：
+1. **私聊从来没配目标**：`behavior.json → proactive.bots[botId].targets` 原来只有两个 `group:`，没有 `c2c:`，所以私聊永远发不到（不是失败，是没配置）。
+2. **一个群发过，其他群被全局冷却挡住**：旧 `tick()` 把 `record.lastSentAt`（整个 bot 上一次发送时间）传给每个目标做 120 分钟冷却判断。第一个目标发出去后 `record.lastSentAt = now`，**同一次检查里后面的目标全部被判 `cooldown`**；而 30 秒后的下一次 tick 依然被这个冷却挡住 → 一天下来基本只有第一个目标能收到。
+3. **重启后 30 分钟内不算“安静”**：`lastActivityMs` 的兜底值是 `#startedAt`，DSH 刚重启就进入窗口的话会被当成“刚有人说话”，一直跳过。
+4. **椎名**：两个目标都被上面 1/2/3 挡掉（state 里连记录都没建），加上它那段时间可能连接不可用，所以一条都没发。
+
+**修复**：
+- 每个目标独立预算与冷却：`minIntervalMinutesPerTarget`（默认 120）、`maxPerDayPerTarget`（默认 3）；全局 `maxPerDay` 提到 9 当安全阀。发过群 A 不再影响群 B / 私聊。
+- `lastActivityMs` 兜底改为 0：没有真实活动记录 = 安静（重启后也能正常发）。
+- 目标之间间隔 1 秒，避免同一秒连发。
+- 新增私聊目标：yuri → `c2c:主人 openid`；椎名 → `c2c:椎名主人 openid`。
+- `proactive-state.json` 现在记录 `counts` / `lastSentByTarget`（每目标计数与时间），方便排查。
+- 回归：`test-proactive-scheduler.mjs` 新增「同一 tick 三个目标各发一条」「每目标 slot 不重复」；并修复测试里 `behavior.json` 同毫秒重写导致 mtime 缓存不刷新的 flaky（写入后强制递增 mtime）。17 个测试全绿。
