@@ -1562,7 +1562,7 @@ export class QqHarnessBridge {
     const entries = (this.#recentChat.get(key) ?? [])
       .filter((entry) => entry.messageId !== currentMessageId)
       .filter((entry) => now - entry.at <= 15 * 60 * 1000)
-      .slice(-8);
+      .slice(-25);
     if (entries.length < 2) return '';
     const lines = entries.map((entry) => {
       const name = entry.senderIsBot ? `${entry.senderName}(机器人)` : entry.senderName;
