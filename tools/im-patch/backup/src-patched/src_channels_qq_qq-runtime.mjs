@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { extractConnectionEvidence, createConnectionDiagnostics, atConnectionStage } from '../shared/connection-error.mjs';
 import { QQBot, contentSanitizer, typingIndicator } from '@tencent-connect/qqbot-nodejs';
 
@@ -7,6 +11,8 @@ import {
 } from '../shared/connection-test.mjs';
 import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
+import { readSwitchState } from '../shared/im-switch.mjs';
+import { createQqProactiveScheduler } from './qq-proactive.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { isQqMessageAddressed, normalizeQqMentions } from './qq-mention.mjs';
 import { sendMarkdownReply } from './markdown-reply.mjs';
@@ -47,6 +53,7 @@ export class QqRuntime {
   #status = createQqRuntimeStatus();
   #bot = null;
   #bridge = null;
+  #proactive = null;
   #abortController = null;
   #runTask = null;
   #starting = null;
@@ -146,6 +153,48 @@ export class QqRuntime {
       return { sent: true };
     }
     return this.#bot.sendText(replyTarget, text);
+  }
+
+  /** Local patch: fixed-time proactive messages (behavior.json → proactive). */
+  #proactiveAllowed(key) {
+    if (!this.#status.ready || !this.#bot) return false;
+    const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+    if (existsSync(join(home, 'integrations', 'dsh-im', 'paused'))) return false;
+    const switches = readSwitchState();
+    return String(key).startsWith('c2c:') ? switches.direct !== false : switches.group !== false;
+  }
+
+  #noteProactiveActivity(message) {
+    if (!this.#proactive) return;
+    if (message?.kind === 'group' && typeof message.groupOpenid === 'string' && message.groupOpenid) {
+      this.#proactive.noteActivity(`group:${message.groupOpenid}`);
+    } else if (message?.kind === 'c2c' && typeof message.senderId === 'string' && message.senderId) {
+      this.#proactive.noteActivity(`c2c:${message.senderId}`);
+    }
+  }
+
+  #startProactiveScheduler() {
+    if (this.#proactive) return;
+    try {
+      const scheduler = createQqProactiveScheduler({
+        botId: this.#config.botId,
+        logger: this.#logger,
+        allowed: (key) => this.#proactiveAllowed(key),
+        send: async (key, text) => {
+          if (!this.#status.ready || !this.#bot) throw new Error('QQ bot is not connected');
+          const match = /^(group|c2c):(.+)$/u.exec(String(key ?? ''));
+          if (!match) throw new Error(`invalid proactive conversation: ${key}`);
+          const target = { scope: match[1] === 'c2c' ? 'c2c' : 'group', targetId: match[2] };
+          await this.#bot.sendText(target, text);
+          this.#status.messagesReplied += 1;
+          this.#status.lastReplyAt = new Date().toISOString();
+        },
+      });
+      scheduler.start();
+      this.#proactive = scheduler;
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] proactive scheduler failed to start:', error?.message ?? error);
+    }
   }
 
   async start() {
@@ -256,6 +305,7 @@ export class QqRuntime {
       }
     };
     const onMessage = (_ctx, message) => {
+      this.#noteProactiveActivity(message);
       const task = this.#bridge?.accept(message);
       if (!task) return;
       void task.catch((error) => {
@@ -295,6 +345,7 @@ export class QqRuntime {
       this.#status.qqConnectionState = 'connected';
       this.#status.lastCheckedAt = Date.now();
       this.#status.lastConnectedAt = Date.now();
+      this.#startProactiveScheduler();
       return this.status;
     } catch (error) {
       this.#status.ready = false;
@@ -309,6 +360,8 @@ export class QqRuntime {
   }
 
   async stop() {
+    this.#proactive?.stop();
+    this.#proactive = null;
     const bot = this.#bot;
     const bridge = this.#bridge;
     const runTask = this.#runTask;
