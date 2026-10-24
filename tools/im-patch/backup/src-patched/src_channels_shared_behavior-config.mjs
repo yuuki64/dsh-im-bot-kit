@@ -57,6 +57,19 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     digestEnabled: true,
     digestHour: 23,
     digestMinute: 30,
+    // 2026-10-24：口头禅/习惯挖掘（高频短语统计 + 偶尔模仿语气）。
+    habits: Object.freeze({
+      enabled: true,
+      minCount: 6,
+      minCountFragment: 10,
+      minDays: 2,
+      maxShortChars: 16,
+      maxCandidatesPerSender: 200,
+      candidateTtlDays: 30,
+      maxHabitsPerGroup: 10,
+      maxOwnerHabits: 12,
+      mimicProbability: 0.3,
+    }),
   }),
   replyChunking: Object.freeze({
     enabled: true,
