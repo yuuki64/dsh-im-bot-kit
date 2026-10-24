@@ -20,7 +20,7 @@ function check(label, condition, detail = '') {
 try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
-    appendPromptPart, mergeCoalescedMessages,
+    appendPromptPart, mergeCoalescedMessages, formatChatDigest,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
 
   const merged = mergeCoalescedMessages([
@@ -43,6 +43,33 @@ try {
     && !JSON.stringify(arrayContent).includes('[object Object]'),
     JSON.stringify(arrayContent));
   check('append instruction to missing content', appendPromptPart(undefined, 'X') === undefined);
+
+  // 最近群聊摘要：机器人自己的话显示为「你」，当前消息用 ▶ 标出，并包含它之后的消息。
+  const nowMs = Date.now();
+  const digest = formatChatDigest([
+    { senderName: '小蓝莓', text: '猫娘yuuki', at: nowMs - 60_000 },
+    { messageId: 'cur', senderName: 'yuuki🍁', text: '才不是！', at: nowMs - 30_000 },
+    { isSelf: true, senderName: 'yuri', text: '我才不是猫娘', at: nowMs - 20_000 },
+    { senderName: '初童新月', senderIsBot: true, text: '像什么像', at: nowMs - 10_000 },
+  ], {
+    now: nowMs,
+    current: { messageId: 'cur', senderName: 'yuuki🍁', text: '才不是！' },
+  });
+  check('digest includes before/after and marks current',
+    digest.includes('小蓝莓: 猫娘yuuki')
+    && digest.includes('▶ yuuki🍁: 才不是！')
+    && digest.includes('你: 我才不是猫娘')
+    && digest.includes('初童新月(机器人): 像什么像'),
+    JSON.stringify(digest));
+  const digestOrder = digest.indexOf('小蓝莓: 猫娘yuuki') < digest.indexOf('▶ yuuki🍁: 才不是！')
+    && digest.indexOf('▶ yuuki🍁: 才不是！') < digest.indexOf('你: 我才不是猫娘');
+  check('digest keeps chronological order around current', digestOrder === true, JSON.stringify(digest));
+  check('digest needs at least two entries',
+    formatChatDigest([], { now: nowMs, current: { text: 'only' } }) === '');
+  check('digest drops stale entries',
+    formatChatDigest([
+      { senderName: 'a', text: 'old', at: nowMs - 30 * 60_000 },
+    ], { now: nowMs, minutes: 15, current: { text: 'now' } }) === '');
 
   check('quote of own message matches',
     matchesOwnText('他就发个表情，我接啥', ['他就发个表情，我接啥']) === true);
