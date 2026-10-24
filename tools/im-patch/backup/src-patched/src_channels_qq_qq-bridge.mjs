@@ -1211,8 +1211,16 @@ export class QqHarnessBridge {
     const config = readBehaviorConfig().watch;
     if (!config?.enabled) return false;
     if (message?.senderIsBot === true) return false;
+    // 只让配置里列出的 bot 参与 watch（空数组 = 所有 bot；同群两个 bot 同时 watch 会一起接话）。
+    if (Array.isArray(config.botIds) && config.botIds.length > 0
+      && !config.botIds.includes(this.#botId)) return false;
     const text = safeText(message);
     if (!text || text.startsWith('/')) return false;
+    const trimmed = text.trim();
+    // 太短 / 纯符号的碎片（「你就是」「？」「草」）不watch，避免替别人脑补接话。
+    const minChars = Number(config.minChars);
+    if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
+    if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
     if (config.textOnly !== false
       && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
     if (message.kind === 'c2c' && config.direct !== true) return false;
@@ -2310,7 +2318,7 @@ export class QqHarnessBridge {
         const watchConfig = readBehaviorConfig().watch;
         const custom = typeof watchConfig?.instruction === 'string' ? watchConfig.instruction.trim() : '';
         const instruction = custom
-          || '【群消息观察】这条消息没有人叫你。你看到了它，自行决定：不需要接话就只输出 <dsh_im_silent/>，不要写任何解释；想接就正常回一两句。不要提到这条提示。';
+          || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准。想接就正常回一两句，不要提这条提示。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
