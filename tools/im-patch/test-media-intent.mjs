@@ -18,7 +18,21 @@ function check(label, condition, detail = '') {
 }
 
 try {
-  const { extractMediaIntent, mentionsBotByName, qqInboundMessage } = await import(src('src/channels/qq/qq-bridge.mjs'));
+  const {
+    extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain,
+  } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  const chainHistory = [
+    { senderId: 'u1', text: '谁说没有完美犯罪（', at: 1000 },
+    { senderId: 'u2', text: '谁说没有完美犯罪 (', at: 2000 },
+    { senderId: 'bot', senderIsBot: true, text: '谁说没有完美犯罪（', at: 2500 },
+  ];
+  check('repeat chain detected for third person',
+    isRepeatChain(chainHistory, { text: '谁说没有完美犯罪（', senderId: 'u3', now: 3000, windowMinutes: 5, minSenders: 2 }) === true);
+  check('repeat chain ignores single echo',
+    isRepeatChain(chainHistory.slice(0, 1), { text: '谁说没有完美犯罪（', senderId: 'u3', now: 3000 }) === false);
+  check('repeat chain ignores stale messages',
+    isRepeatChain(chainHistory, { text: '谁说没有完美犯罪（', senderId: 'u3', now: 10 * 60_000, windowMinutes: 5 }) === false);
 
   const voiceMsg = qqInboundMessage({
     content: '',
