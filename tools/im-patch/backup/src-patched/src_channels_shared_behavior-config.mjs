@@ -66,7 +66,10 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     windowMinutes: 90,
     quietMinutes: 30,
     minIntervalMinutes: 120,
-    maxPerDay: 3,
+    maxPerDay: 9,
+    // 每个目标（每个群 / 私聊）自己的预算与冷却：一个目标发过不会挡住其他目标。
+    minIntervalMinutesPerTarget: 120,
+    maxPerDayPerTarget: 3,
     probability: 0.85,
     bots: Object.freeze({}),
   }),
