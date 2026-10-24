@@ -53,6 +53,12 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     gapMinMs: 400,
     gapMaxMs: 900,
   }),
+  // 2026-10-24：同一人连发多条时先等一小会儿再一起回复（避免抢答第一句）。
+  replyCoalesce: Object.freeze({
+    enabled: true,
+    settleMs: 2500,
+    maxMessages: 6,
+  }),
   stickerCollect: Object.freeze({
     enabled: true,
     scope: 'group',

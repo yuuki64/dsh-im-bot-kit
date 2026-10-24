@@ -1031,3 +1031,16 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 
 **测试**：18 个测试全绿。**代码改动需重启一次 DSH。**
 
+### 18.22 连发消息合并回复（2026-10-24 第十九轮）
+
+**现象**：同一人短时间内连发两句，机器人抢先回第一句、再回第二句——真人不会这样，应该等都看完再一起回。
+
+**修复**：
+- 新增 `behavior.json → replyCoalesce`（默认 `enabled:true, settleMs:2500, maxMessages:6`）；
+- 走 `reply` 路径的普通聊天消息先进每会话的合并缓冲：`settleMs` 内再来的同人消息一起合并；命令、待回答问题/审批、批量输入、菜单不合并；
+- 合并成一条模型 prompt（文本按行拼接、附件/mentions 合并，`messageId` 带 `#coalesced`），只回一次；原消息全部标记已读；
+- 若上一轮还在生成，缓冲会等它结束后再一起处理（期间新消息继续并入），不会出现“两连答”；
+- 回归测试：`mergeCoalescedMessages()` 文本/附件/mentions 合并、空列表返回 null。
+
+**代价**：回复会晚 `settleMs`（默认 2.5 秒），换来“一次看完再回”的自然节奏。
+

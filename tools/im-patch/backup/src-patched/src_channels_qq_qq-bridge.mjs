@@ -542,7 +542,9 @@ export function appendPromptPart(content, part) {
   return content;
 }
 
-/** 是否收尾语（导出便于测试）。 */
+/**
+ * 是否收尾语（导出便于测试）。
+ */
 export function isClosingMessage(text) {
   return CLOSING_PATTERN.test(String(text ?? '').trim());
 }
@@ -554,6 +556,39 @@ export function inQuietHours(now, hours) {
   if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return false;
   const hour = new Date(now).getHours();
   return start < end ? (hour >= start && hour < end) : (hour >= start || hour < end);
+}
+
+/**
+ * 本地补丁（2026-10-24）：把同一人连发的几条消息合成一条 prompt，
+ * 避免「机器人抢答第一句、再答第二句」。
+ * @param {Array<{message: object, messageId: string}>} entries
+ * @returns {object|null} 合并后的消息（messageId 带 #coalesced 标记）
+ */
+export function mergeCoalescedMessages(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const messages = entries.map((entry) => entry?.message).filter(Boolean);
+  if (messages.length === 0) return null;
+  const last = messages[messages.length - 1];
+  const texts = [];
+  for (const message of messages) {
+    const text = typeof message?.content === 'string' ? message.content.trim() : '';
+    if (text) texts.push(text);
+  }
+  const attachments = [];
+  for (const message of messages) {
+    if (Array.isArray(message?.attachments)) attachments.push(...message.attachments);
+  }
+  const mentions = [];
+  for (const message of messages) {
+    if (Array.isArray(message?.mentions)) mentions.push(...message.mentions);
+  }
+  return {
+    ...last,
+    messageId: `${last.messageId ?? 'coalesced'}#coalesced${messages.length}`,
+    content: texts.join('\n'),
+    attachments,
+    mentions,
+  };
 }
 
 /** 归一化一行聊天文字，用于复读接龙比较（去 @、空白、标点、大小写）。 */
@@ -1022,6 +1057,8 @@ export class QqHarnessBridge {
   #engagedTurnIds = new Set();
   // 本地补丁：本轮是否由明确点名触发（用于区分「点名」与「接话窗口」提示）。
   #explicitTurnIds = new Set();
+  // 本地补丁：同一人连发多条时的合并缓冲（每会话一个）。
+  #coalescePending = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1714,6 +1751,11 @@ export class QqHarnessBridge {
       });
     }
     // decision.action === 'reply'
+    // 本地补丁（2026-10-24）：同一人连发几条时先等 settleMs，再合成一条一起回，
+    // 避免「抢答第一句、再答第二句」；命令/待回答问题/批量输入不合并。
+    if (this.#canCoalesce(message, key)) {
+      return this.#queueCoalesced(message, messageId, key);
+    }
     const addressed = true;
     const commandText = safeText(message);
     const menuTextOnly = !hasQqImageAttachments(message) && !hasQqFileAttachments(message)
@@ -1940,17 +1982,92 @@ export class QqHarnessBridge {
     });
   }
 
+  /** 同一人连发多条时是否合并成一个回复。 */
+  #canCoalesce(message, key) {
+    const config = readBehaviorConfig().replyCoalesce;
+    if (!config?.enabled) return false;
+    if (message?.senderIsBot === true) return false;
+    const text = safeText(message);
+    if (text.startsWith('/')) return false;
+    if (this.#pendingInteractions.has(key) || this.#approvals.hasPending(key)) return false;
+    if (this.#batchInputs.status(key).phase !== 'idle') return false;
+    if (isQqMenuCommand(text)) return false;
+    return true;
+  }
+
+  #queueCoalesced(message, messageId, key) {
+    const config = readBehaviorConfig().replyCoalesce;
+    const settleMs = Math.max(200, Number(config?.settleMs) || 2500);
+    const maxMessages = Math.max(2, Math.min(20, Number(config?.maxMessages) || 6));
+    const buffer = this.#coalescePending.get(key) ?? { entries: [], timer: null };
+    buffer.entries.push({ message, messageId });
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+      buffer.timer = null;
+    }
+    const flush = () => {
+      if (buffer.timer) {
+        clearTimeout(buffer.timer);
+        buffer.timer = null;
+      }
+      void this.#flushCoalesced(key).catch((error) => {
+        this.#logger.warn?.('[dsh-im:qq] coalesced reply failed:', error?.message ?? error);
+      });
+    };
+    if (buffer.entries.length >= maxMessages) flush();
+    else buffer.timer = setTimeout(flush, settleMs);
+    this.#coalescePending.set(key, buffer);
+    return Promise.resolve();
+  }
+
+  async #flushCoalesced(key) {
+    const buffer = this.#coalescePending.get(key);
+    if (!buffer) return;
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+      buffer.timer = null;
+    }
+    // 上一轮还在生成：等它结束再一起处理（期间新消息会继续进缓冲）。
+    if (this.#queues.has(key)) {
+      buffer.timer = setTimeout(() => {
+        if (buffer.timer) {
+          clearTimeout(buffer.timer);
+          buffer.timer = null;
+        }
+        void this.#flushCoalesced(key).catch(() => {});
+      }, 500);
+      this.#coalescePending.set(key, buffer);
+      return;
+    }
+    this.#coalescePending.delete(key);
+    const entries = buffer.entries.filter((entry) => entry?.message && entry?.messageId);
+    if (entries.length === 0) return;
+    // 原消息全部标记已读；合成消息本身不再重复计数。
+    for (const entry of entries) {
+      await this.#state.markSeen(entry.messageId).catch(() => {});
+    }
+    const merged = mergeCoalescedMessages(entries);
+    if (!merged) return;
+    this.#acceptedMessageIds.set(merged.messageId, captureContextEnhancement(
+      this.#contextEnhancement,
+      merged.kind === 'c2c' ? 'direct' : 'group',
+    ));
+    this.#logDecision(merged, key, { action: 'reply', reason: `coalesced-${entries.length}` });
+    await this.#enqueueMessage(merged, merged.messageId, key, { forceReply: true, alreadyRecorded: true });
+  }
+
   #enqueueMessage(message, messageId, key, {
     releaseMessageId = true,
     alreadyRecorded = false,
     batchSubmission = null,
     watchMode = false,
     repeatMode = false,
+    forceReply = false,
   } = {}) {
     // Persist before the message joins the in-memory chain: the chain may wait
     // behind a long turn, and a restart in that window must not lose the input.
     const pending = this.#recordPendingMessage(message, messageId, key);
-    const addressed = this.#shouldReply(message, key);
+    const addressed = forceReply || this.#shouldReply(message, key);
     const preparedMessage = addressed
       ? prefetchInboundFiles(
           qqInboundMessage(message, { fetchImpl: this.#fetchImpl }),
@@ -1967,6 +2084,7 @@ export class QqHarnessBridge {
         batchSubmission,
         watchMode,
         repeatMode,
+        forceReply,
       }))
       .finally(async () => {
         if (releaseMessageId) this.#acceptedMessageIds.delete(messageId);
@@ -2626,6 +2744,7 @@ export class QqHarnessBridge {
     batchSubmission = null,
     watchMode = false,
     repeatMode = false,
+    forceReply = false,
   } = {}) {
     if (this.#signal?.aborted) return;
     const messageId = nonEmptyString(message?.messageId);
@@ -2667,7 +2786,7 @@ export class QqHarnessBridge {
       await markMessageSeen().catch(() => undefined);
       return;
     }
-    if (!watchMode && !this.#shouldReply(message, key)) return;
+    if (!watchMode && !forceReply && !this.#shouldReply(message, key)) return;
     if (!this.#allowBotReply(message, key)) return;
 
     const target = message.replyTarget;
