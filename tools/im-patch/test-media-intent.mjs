@@ -138,6 +138,22 @@ try {
   const plain = extractMediaIntent('就一句话。');
   check('plain text has no voice', plain.voiceTexts.length === 0 && plain.voiceText === null, JSON.stringify(plain));
 
+  // 长期记忆标签：从正文剥离并收集，不触发语音/表情，不改变正常回复。
+  const withMemory = extractMediaIntent('人在这啊<dsh_im_memory>主人喜欢猫</dsh_im_memory>');
+  check('memory tag stripped and collected',
+    withMemory.text === '人在这啊' && withMemory.memoryNotes.length === 1
+    && withMemory.memoryNotes[0] === '主人喜欢猫' && withMemory.silent === false,
+    JSON.stringify(withMemory));
+  const memoryOnly = extractMediaIntent('<dsh_im_memory>群里约定周末打游戏</dsh_im_memory>');
+  check('memory-only answer counts as silence',
+    memoryOnly.silent === true && memoryOnly.memoryNotes.length === 1, JSON.stringify(memoryOnly));
+  const memoryCap = extractMediaIntent([
+    '<dsh_im_memory>一</dsh_im_memory>',
+    '<dsh_im_memory>二</dsh_im_memory>',
+    '<dsh_im_memory>三</dsh_im_memory>',
+  ].join(''));
+  check('memory notes capped at 2', memoryCap.memoryNotes.length === 2, JSON.stringify(memoryCap.memoryNotes));
+
   const one = extractMediaIntent('<dsh_im_voice>第一句</dsh_im_voice>');
   check('single voice extracted', one.voiceTexts.length === 1 && one.voiceTexts[0] === '第一句', JSON.stringify(one));
   check('single voice keeps compatibility field', one.voiceText === '第一句');
