@@ -47,6 +47,12 @@ try {
   check('recent decisions returns latest N', recent.length === 2 && recent[1].reason === 'reason-2',
     JSON.stringify(recent.map((record) => record.reason)));
   check('decision log filters by bot', recent.every((record) => record.bot === 'bot-a'));
+  // 回归：bot 字段必须是 botId 本身，不能被子字段（sender 是否机器人）覆盖。
+  decisionLog.appendDecision('bot-a', { action: 'skip', reason: 'field-check', text: 'x', fromBot: true }, { now });
+  const fieldCheck = decisionLog.readRecentDecisions('bot-a', { limit: 1, now });
+  check('decision log keeps botId and fromBot apart',
+    fieldCheck.length === 1 && fieldCheck[0].bot === 'bot-a' && fieldCheck[0].fromBot === true,
+    JSON.stringify(fieldCheck[0]));
 
   // closing / quiet hours helpers
   check('closing: 晚安 closes', isClosingMessage('晚安') === true);

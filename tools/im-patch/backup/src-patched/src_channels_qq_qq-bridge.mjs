@@ -1468,7 +1468,12 @@ export class QqHarnessBridge {
     const state = this.#watchHistory.get(key) ?? { lastAtBySender: {}, hits: [] };
     if (!state.lastAtBySender || typeof state.lastAtBySender !== 'object') state.lastAtBySender = {};
     const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
-    if (now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) return deny('sender-cooldown');
+    // 引用消息、主人消息不按发送者冷却（否则同一个人 1 分钟内再发一句就被挡掉）。
+    const bypassSenderCooldown = quoteRef || ownerMessage;
+    if (!bypassSenderCooldown
+      && now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) {
+      return deny('sender-cooldown');
+    }
     state.hits = (Array.isArray(state.hits) ? state.hits : []).filter((at) => now - at < 24 * 60 * 60 * 1000);
     const hourHits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
     const hourLimit = Number(config.maxPerHour);
@@ -1583,7 +1588,7 @@ export class QqHarnessBridge {
         conv: key,
         sender: message?.senderName || message?.senderId,
         owner: isOwnerSender(message, this.#ownerUserOpenid),
-        bot: message?.senderIsBot === true,
+        fromBot: message?.senderIsBot === true,
         action: decision.action,
         reason: decision.reason,
         text: safeText(message).slice(0, prefix),
@@ -1604,7 +1609,7 @@ export class QqHarnessBridge {
         conv: key,
         sender: message?.senderName || message?.senderId,
         owner: isOwnerSender(message, this.#ownerUserOpenid),
-        bot: message?.senderIsBot === true,
+        fromBot: message?.senderIsBot === true,
         action: outcome.action,
         reason: outcome.reason,
         text: safeText(message).slice(0, prefix),
