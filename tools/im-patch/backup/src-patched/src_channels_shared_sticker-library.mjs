@@ -5,7 +5,8 @@
 // copied). QQ's bot API has no "sticker/face" message type, so a sticker is
 // sent as a normal image message; animated GIFs stay animated.
 
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 
@@ -143,4 +144,151 @@ export async function pickSticker(query = '') {
 
 export function stickerCount(stickers) {
   return Array.isArray(stickers) ? stickers.length : 0;
+}
+
+// ---------------------------------------------------------------------------
+// 本地补丁（2026-10-24）：入站表情自动收藏
+//
+// 只收 GIF/WebP/PNG 小图（照片通常是更大的 jpg，天然避开），按内容 sha1
+// 去重存进用户表情库，并限制每分钟/每小时/每天数量与自动收藏总量，超过
+// 上限时删最早的自动收藏（不动用户自己放进去的图）。
+// ---------------------------------------------------------------------------
+
+const AUTO_PREFIX = 'auto_';
+const COLLECTABLE_EXTENSIONS = new Set(['.gif', '.webp', '.png']);
+export const MIN_COLLECT_BYTES = 2 * 1024;
+export const MAX_COLLECT_BYTES = 3 * 1024 * 1024;
+
+function sniffImageExtension(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 6) return null;
+  const head = buffer.subarray(0, 6).toString('latin1');
+  if (head === 'GIF87a' || head === 'GIF89a') return '.gif';
+  if (buffer.length >= 8
+    && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47
+    && buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) return '.png';
+  if (buffer.length >= 12
+    && buffer.subarray(0, 4).toString('latin1') === 'RIFF'
+    && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return '.webp';
+  return null;
+}
+
+/** Whether one inbound attachment looks like a collectable sticker. */
+export function isCollectableSticker({
+  name = '',
+  mediaType = '',
+  size = null,
+  extensions = COLLECTABLE_EXTENSIONS,
+} = {}) {
+  const type = String(mediaType ?? '').toLowerCase();
+  const extension = extname(String(name ?? '')).toLowerCase();
+  const allowed = extensions instanceof Set ? extensions : new Set(extensions ?? COLLECTABLE_EXTENSIONS);
+  const typeAccepted = type
+    ? (type === 'image/gif' || type === 'image/webp' || type === 'image/png')
+    : allowed.has(extension);
+  if (!typeAccepted) return false;
+  if (type && allowed.size > 0 && !allowed.has(extension) && extension) return false;
+  const bytes = Number(size);
+  if (Number.isFinite(bytes) && (bytes < MIN_COLLECT_BYTES || bytes > MAX_COLLECT_BYTES)) return false;
+  return true;
+}
+
+const collectLog = [];
+
+/** Sliding window rate limit for auto collection (shared process-wide). */
+export function allowStickerCollection({ perMinute = 1, perHour = 10, perDay = 40 } = {}, now = Date.now()) {
+  while (collectLog.length > 0 && now - collectLog[0] > 24 * 60 * 60 * 1000) collectLog.shift();
+  const minute = collectLog.filter((at) => now - at < 60_000).length;
+  const hour = collectLog.filter((at) => now - at < 60 * 60 * 1000).length;
+  const day = collectLog.length;
+  if (minute >= Number(perMinute)) return false;
+  if (hour >= Number(perHour)) return false;
+  if (day >= Number(perDay)) return false;
+  collectLog.push(now);
+  return true;
+}
+
+export function resetStickerCollectLog() {
+  collectLog.length = 0;
+}
+
+async function countAutoStickers(directory) {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return { entries: [], total: 0 };
+  }
+  const auto = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith(AUTO_PREFIX)) continue;
+    const extension = extname(entry.name).toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(extension)) continue;
+    try {
+      auto.push({ name: entry.name, path: join(directory, entry.name), mtimeMs: (await stat(join(directory, entry.name))).mtimeMs });
+    } catch {
+      // ignore unreadable entries
+    }
+  }
+  return { entries: auto, total: auto.length };
+}
+
+async function enforceAutoCap(directory, maxLibrary) {
+  const limit = Number.isFinite(Number(maxLibrary)) && Number(maxLibrary) > 0 ? Math.floor(Number(maxLibrary)) : 800;
+  const { entries, total } = await countAutoStickers(directory);
+  if (total <= limit) return 0;
+  entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  let removed = 0;
+  for (const entry of entries.slice(0, total - limit)) {
+    try {
+      await unlink(entry.path);
+      removed += 1;
+    } catch {
+      // ignore
+    }
+  }
+  return removed;
+}
+
+/**
+ * Save one sticker into the first configured library directory.
+ * @returns {Promise<{saved: boolean, reason?: string, path?: string}>}
+ */
+export async function saveSticker({ bytes, name = '', maxLibrary = 800, dir = null } = {}) {
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
+  if (buffer.length < MIN_COLLECT_BYTES) return { saved: false, reason: 'too-small' };
+  if (buffer.length > MAX_COLLECT_BYTES) return { saved: false, reason: 'too-large' };
+  const declared = extname(String(name ?? '')).toLowerCase();
+  const extension = COLLECTABLE_EXTENSIONS.has(declared) ? declared : sniffImageExtension(buffer);
+  if (!extension) return { saved: false, reason: 'type' };
+  const directory = dir ?? (await readStickerConfig()).dirs[0];
+  if (!directory) return { saved: false, reason: 'no-library' };
+  await mkdir(directory, { recursive: true });
+  const digest = createHash('sha1').update(buffer).digest('hex').slice(0, 16);
+  const target = join(directory, `${AUTO_PREFIX}${digest}${extension}`);
+  try {
+    await stat(target);
+    return { saved: false, reason: 'duplicate', path: target };
+  } catch {
+    // not collected yet
+  }
+  await writeFile(target, buffer);
+  cache = null; // force the next pick to rescan
+  await enforceAutoCap(directory, maxLibrary);
+  return { saved: true, path: target };
+}
+
+/** Auto-collected sticker count/bytes (status helpers). */
+export async function autoStickerStats({ dir = null } = {}) {
+  const directory = dir ?? (await readStickerConfig()).dirs[0];
+  if (!directory) return { count: 0, bytes: 0 };
+  const { entries } = await countAutoStickers(directory);
+  let bytes = 0;
+  for (const entry of entries) {
+    try {
+      bytes += (await stat(entry.path)).size;
+    } catch {
+      // ignore
+    }
+  }
+  return { count: entries.length, bytes };
 }

@@ -732,3 +732,56 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 原因：`#recoverPendingMessages()` 对「已提交但没跑完」的队列消息会调 `#notifyInterruptedPending(entry)`，原来不区分会话类型，有投递目标就直接发。
 
 修复：新增纯函数 `shouldNotifyInterruptedPending(entry)`——**群聊一律不发**（只写一条 warn 日志），**私聊保留**（只有主人看得到，提示重新发送是有用的）。回归：`node test-pending-notice.mjs`（5 项）。
+
+---
+
+## 18. 行为配置：长句拆条 / 表情自动收藏 / 定时主动消息（2026-10-24）
+
+新增统一配置文件 `<DSH_HOME>\integrations\dsh-im\behavior.json`。**只改 behavior.json / 人设卡不用重启**（下一条消息生效）；改了代码必须 `node apply.mjs` + 完全退出重开 DSH。默认值在 `src/channels/shared/behavior-config.mjs` 的 `BEHAVIOR_DEFAULTS`，文件缺失或字段缺失都会回落默认；部分字段可只写要改的。
+
+### 18.1 长句拆条（replyChunking）
+
+- 旧行为：一次回复 = 一条 QQ 消息（`sendMarkdownReply` → `chunkMarkdownParts`，**4500 字**才按换行/代码块切）。
+- 新行为：聊天型回复先由 `channels/qq/chat-segments.mjs` 按**句末标点（。！？…；）和换行**切段（不按逗号），再由 `channels/qq/markdown-reply.mjs` 的 `segments` 逐段发送，段间随机 `gapMinMs~gapMaxMs`。
+- 默认：单段 ≤60 字、最多 3 段（硬上限 4 段，受被动回复上限 群 5 / 私聊 4 约束）。
+- **不拆**：总长 ≤60 字、单个长句、代码块、表格、含 URL 的回复——仍按原来的单条/长文路径走。
+- 配置键：`replyChunking.enabled / maxChars / maxSegments / gapMinMs / gapMaxMs`。
+- 回归：`node test-chat-segments.mjs`（14 项）。
+
+### 18.2 表情自动收藏（stickerCollect）
+
+- 入站消息里的 GIF/WebP/PNG 小图（2KB~3MB）自动存进表情库 `stickers\`，文件名 `auto_<sha1前16>.gif`；同图去重。
+- 只收图片附件；QQ face 标签在插件里早被转成文本，收不到；照片（jpg、大图）默认不收。
+- 限速/限量：默认每分钟 1、每小时 10、每天 40，自动收藏总量上限 800；超限删最早的 `auto_` 文件，**不动手动放进库的图**。
+- 可选 `groups: []` 白名单（空 = 所有群）。
+- 配置键：`stickerCollect.enabled / scope / extensions / minBytes / maxBytes / groups / perMinute / perHour / perDay / maxLibrary`。
+- 回归：`node test-sticker-collect.mjs`（18 项）。
+
+### 18.3 定时主动消息（proactive）
+
+- 之前插件**没有主动发消息能力**。现在每个 bot 可配每天固定时间点（默认 07:45 / 11:45 / 17:45，±25 分钟抖动），满足条件后发一条模板文本（**不调模型，0 token**）。
+- 触发条件：到点且在窗口内（默认 90 分钟）、群安静 ≥30 分钟、距上次主动 ≥120 分钟、当天 ≤3 条、概率 0.85。
+- 状态：`<DSH_HOME>\integrations\dsh-im\proactive-state.json`，按天记录已发时段，重启不会重复发；IM 总暂停或对应开关（群聊/私聊）关闭时不发。
+- 文案按 `bots[botId].texts` 的时段配置（`"07:45": [...]` 或 `default: [...]`），当前 yuri / 椎名各写了早/中/晚三条。
+- 这是**模板版**；AI 生成版（`askInWorkspaceSession` 生成后发）留作二期，见 `_analysis/impl-notes.md`。
+- 配置键：`proactive.enabled / dailyTimes / jitterMinutes / windowMinutes / quietMinutes / minIntervalMinutes / maxPerDay / probability / bots[botId].enabled|targets|texts`。
+- 回归：`node test-proactive-scheduler.mjs`（24 项，含真实调度一次、去重、日上限、状态落盘）。
+
+### 18.4 补丁集变化（25 → 29）
+
+新增 4 个补丁文件：`channels/qq/markdown-reply.mjs`、`channels/qq/chat-segments.mjs`、`channels/qq/qq-proactive.mjs`、`channels/shared/behavior-config.mjs`；改动 3 个既有文件：`qq-bridge.mjs`（入站收藏 hook + 出站拆条）、`qq-runtime.mjs`（调度器生命周期 + 活跃时间）、`sticker-library.mjs`（`saveSticker` / 限速 / 容量）。`manifest.mjs` 与 `apply.mjs` 的产物标记同步更新。
+
+测试：`test-*.mjs` 由 13 个变 16 个（新增 3 个）；`verify-build --self-test` 仍是 10 例。
+
+### 18.5 验收顺序
+
+```powershell
+cd "<WORKSPACE>\tools\im-patch"
+node apply.mjs
+node test-chat-segments.mjs
+node test-sticker-collect.mjs
+node test-proactive-scheduler.mjs
+# 其余回归
+Get-ChildItem -Filter "test-*.mjs" | ForEach-Object { node $_.FullName }
+node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出重开 DSH 后 exit 0
+```
