@@ -46,6 +46,18 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     retentionDays: 30,
     textPrefix: 24,
   }),
+  // 2026-10-24：长期记忆（标签抓取 + 每日摘要 + prompt 注入）。
+  memory: Object.freeze({
+    enabled: true,
+    maxInjectChars: 700,
+    captureLimitPerTurn: 2,
+    retentionDays: 90,
+    maxOwnerFacts: 80,
+    maxFactsPerGroup: 60,
+    digestEnabled: true,
+    digestHour: 23,
+    digestMinute: 30,
+  }),
   replyChunking: Object.freeze({
     enabled: true,
     maxChars: 20,

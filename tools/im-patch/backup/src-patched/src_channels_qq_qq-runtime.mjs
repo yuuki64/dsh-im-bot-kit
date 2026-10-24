@@ -55,6 +55,7 @@ export class QqRuntime {
   #bot = null;
   #bridge = null;
   #proactive = null;
+  #memoryTimer = null;
   #abortController = null;
   #runTask = null;
   #starting = null;
@@ -198,6 +199,31 @@ export class QqRuntime {
     this.#status.lastReplyAt = new Date().toISOString();
     this.#logger.info?.(`[dsh-im:qq] AI proactive bubble delivered (${targetKey}): ${text.slice(0, 40)}`);
     return { sent: true, text };
+  }
+
+  /** 本地补丁：每日记忆摘要定时器（默认 23:30 后跑一次，状态由 memory-store 去重）。 */
+  #startMemoryDigestTimer() {
+    if (this.#memoryTimer) return;
+    const tick = () => {
+      try {
+        const memory = readBehaviorConfig().memory;
+        if (memory?.enabled === false || memory?.digestEnabled === false) return;
+        if (!this.#bridge || !this.#status.ready) return;
+        const now = new Date();
+        const hour = Number(memory.digestHour) || 23;
+        const minute = Number(memory.digestMinute) || 30;
+        if (now.getHours() < hour) return;
+        if (now.getHours() === hour && now.getMinutes() < minute) return;
+        void this.#bridge.runMemoryDigest()
+          .catch((error) => this.#logger.warn?.('[dsh-im:qq] memory digest error:', error?.message ?? error));
+      } catch {
+        // digest is best-effort
+      }
+    };
+    this.#memoryTimer = setInterval(tick, 10 * 60 * 1000);
+    this.#memoryTimer.unref?.();
+    const first = setTimeout(tick, 60_000);
+    first.unref?.();
   }
 
   #startProactiveScheduler() {
@@ -375,6 +401,7 @@ export class QqRuntime {
       this.#status.lastCheckedAt = Date.now();
       this.#status.lastConnectedAt = Date.now();
       this.#startProactiveScheduler();
+      this.#startMemoryDigestTimer();
       return this.status;
     } catch (error) {
       this.#status.ready = false;
@@ -391,6 +418,10 @@ export class QqRuntime {
   async stop() {
     this.#proactive?.stop();
     this.#proactive = null;
+    if (this.#memoryTimer) {
+      clearInterval(this.#memoryTimer);
+      this.#memoryTimer = null;
+    }
     const bot = this.#bot;
     const bridge = this.#bridge;
     const runTask = this.#runTask;
