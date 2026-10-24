@@ -831,3 +831,18 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - `~/.dsh/logs/qq-bot-restrict.log` 三行都是 `ok allow=[]`。
 
 **风险与回滚**：`tools.restrict` 若在当前 DSH 版本报错，插件只打印日志、不阻塞启动（退化为不省 token）；若 preset 行导致 DSH 起不来，双击回滚 .bat 后重启即可。
+
+### 18.8 watch 模式（每句都先看一眼，自己决定回不回）+ 标签误当工具的修复（2026-10-24 第四轮）
+
+**watch 模式**（`behavior.json → watch`，默认开）：
+- 群里没人叫机器人时，插件也会把这条**文本**消息递给 AI 看一眼（最多 10 万 token 级的轻量 preset 下每轮约 10k 上下文，成本很低）。
+- prompt 末尾追加一段「【群消息观察】…不需要接话就只输出 `<dsh_im_silent/>`」；模型照常可以用表情/语音标签。
+- 限速：`minIntervalMs`（默认 20s）、`maxPerHour`（默认 12）、`textOnly`（默认 true，只看纯文本，跳过图片/文件/引用）、`groups`（空=全部群）、`direct`（默认 false，私聊不 watch）、`instruction`（可整段覆盖默认提示词）。
+- 开关：`behavior.json → watch.enabled: false` 立即关闭（热生效，不用重启）。
+- 实现：`qq-bridge.mjs` 新增 `#allowWatch()`；`#accept` 在 `!addressed` 时若允许就把消息按 watch 模式入队，`#process` 里跳过「必须被点名」闸门并追加指令。
+
+**标签误当工具的修复**（群里出现「工具调用「dsh_im_silent」未成功」）：
+- 现象：模型偶尔把 `<dsh_im_silent/>` 当成工具名去调用；DSH 返回 unknown tool 错误，插件把错误当正文发进群。
+- 修复：`onUpdate` 里识别 `dsh_im_*` 虚拟标签名（silent/sticker/voice/sticker_tag/sticker_reject）→ 不报错、只记日志；`dsh_im_silent` 视为静默（不发消息）。同时在全局 `AGENTS.md` 增加「这些标签是正文，不是工具」的硬提示。
+
+**回归**：17 个 `test-*.mjs` 仍全绿；本轮产物 9,126,xxx B（见 build-manifest）。**代码改动需再重启 DSH 一次**；`behavior.json` 的开关/参数热生效。
