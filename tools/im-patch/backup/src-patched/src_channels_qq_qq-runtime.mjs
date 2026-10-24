@@ -192,6 +192,8 @@ export class QqRuntime {
     if (!text) return { sent: false };
     const target = { scope: match[1] === 'c2c' ? 'c2c' : 'group', targetId: match[2] };
     await this.#bot.sendText(target, text);
+    // 本地补丁：主动冒泡也算「机器人说过的话」，记进最近群聊。
+    this.#bridge.noteOwnMessage(targetKey, text);
     this.#status.messagesReplied += 1;
     this.#status.lastReplyAt = new Date().toISOString();
     this.#logger.info?.(`[dsh-im:qq] AI proactive bubble delivered (${targetKey}): ${text.slice(0, 40)}`);

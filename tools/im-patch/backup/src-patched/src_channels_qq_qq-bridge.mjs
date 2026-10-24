@@ -1477,6 +1477,11 @@ export class QqHarnessBridge {
    * 本地补丁（2026-10-24）：AI 主动冒泡——在该会话里让模型结合上下文主动说一句。
    * 返回 null 表示模型选择沉默（<dsh_im_silent/>）或生成失败。
    */
+  /** 本地补丁：把机器人主动发出的话记进最近群聊（AI 冒泡等运行时代发场景用）。 */
+  noteOwnMessage(key, text) {
+    this.#rememberOwnChat(key, text);
+  }
+
   async generateProactiveBubble(key, { quietMinutes = 15 } = {}) {
     // 预算用尽时不再主动冒泡（只保留点名/引用/复读回复）。
     const budget = readBehaviorConfig().budget;
@@ -3181,6 +3186,10 @@ export class QqHarnessBridge {
             voiceFailure = voiceFailureMessage(error);
             break;
           }
+        }
+        // 本地补丁：语音回复也记进最近群聊，让下一轮上下文里能看到「刚才是我说的」。
+        if (message.kind === 'group') {
+          this.#rememberOwnChat(key, `[语音] ${voiceTexts.join(' / ')}`);
         }
       }
       if (mediaIntent.stickerQuery !== null) {
