@@ -19,8 +19,15 @@ function check(label, condition, detail = '') {
 
 try {
   const {
-    extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain,
+    extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  check('quote of own message matches',
+    matchesOwnText('他就发个表情，我接啥', ['他就发个表情，我接啥']) === true);
+  check('quote with different punctuation matches',
+    matchesOwnText('他就发个表情 我接啥。', ['他就发个表情，我接啥']) === true);
+  check('quote of someone else does not match',
+    matchesOwnText('今天吃什么', ['他就发个表情，我接啥']) === false);
 
   const chainHistory = [
     { senderId: 'u1', text: '谁说没有完美犯罪（', at: 1000 },
