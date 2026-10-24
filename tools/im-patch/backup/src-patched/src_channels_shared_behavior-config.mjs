@@ -53,8 +53,10 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     textOnly: true,
     minChars: 6,
     botIds: Object.freeze([]),
-    minIntervalMs: 30000,
-    maxPerHour: 6,
+    minIntervalMs: 60000,
+    maxPerHour: 4,
+    maxPerDay: 30,
+    topics: Object.freeze({}),
     instruction: '',
   }),
   proactive: Object.freeze({

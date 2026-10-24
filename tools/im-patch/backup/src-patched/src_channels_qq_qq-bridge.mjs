@@ -1263,6 +1263,18 @@ export class QqHarnessBridge {
     const minChars = Number(config.minChars);
     if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
     if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
+    // 不抢话：别人在 @ 别人（不是我们）时不 watch。
+    const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
+    if (mentions.length > 0
+      && !mentions.some((mention) => mention?.is_you === true)
+      && !mentionsBotByName(message, this.#selfNames)) return false;
+    // 话题白名单：只对「和这个机器人相关」的关键词做 watch（behavior.json → watch.topics[botId]）。
+    const topicMap = config.topics && typeof config.topics === 'object' ? config.topics : null;
+    const topics = topicMap
+      ? (Array.isArray(topicMap[this.#botId]) ? topicMap[this.#botId] : topicMap.all)
+      : null;
+    if (Array.isArray(topics) && topics.length > 0
+      && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return false;
     if (config.textOnly !== false
       && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
     if (message.kind === 'c2c' && config.direct !== true) return false;
@@ -1274,9 +1286,13 @@ export class QqHarnessBridge {
     const now = Date.now();
     const state = this.#watchHistory.get(key) ?? { lastAt: 0, hits: [] };
     if (now - state.lastAt < (Number(config.minIntervalMs) || 0)) return false;
-    state.hits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
-    const limit = Number(config.maxPerHour);
-    if (Number.isFinite(limit) && limit > 0 && state.hits.length >= limit) return false;
+    // 保留 24h 内的记录，分别按小时/按天限速。
+    state.hits = (Array.isArray(state.hits) ? state.hits : []).filter((at) => now - at < 24 * 60 * 60 * 1000);
+    const hourHits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
+    const hourLimit = Number(config.maxPerHour);
+    if (Number.isFinite(hourLimit) && hourLimit > 0 && hourHits.length >= hourLimit) return false;
+    const dayLimit = Number(config.maxPerDay);
+    if (Number.isFinite(dayLimit) && dayLimit > 0 && state.hits.length >= dayLimit) return false;
     state.lastAt = now;
     state.hits.push(now);
     this.#watchHistory.set(key, state);
