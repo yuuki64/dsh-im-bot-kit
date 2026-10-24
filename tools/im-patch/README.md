@@ -1017,3 +1017,5 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - 超限后：只回点名/@、引用、复读接龙；watch 与 AI 冒泡停掉；记录在 `cost-budget.json`。
 
 **测试**：新增 `test-decision-budget.mjs`（预算累计/上限、决策日志读写过滤、收尾语、免打扰跨午夜）——测试总数 **18 个全绿**。**本轮代码需重启一次 DSH。**
+> 功能总览与实现索引见 [docs/features.md](../../../../im-bot-kit/docs/features.md)（镜像仓）；决策记录见 [docs/decisions-im-autonomy.md](../../../../im-bot-kit/docs/decisions-im-autonomy.md)。
+
