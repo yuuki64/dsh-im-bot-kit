@@ -20,8 +20,18 @@ function check(label, condition, detail = '') {
 try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
-    appendPromptPart,
+    appendPromptPart, mergeCoalescedMessages,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  const merged = mergeCoalescedMessages([
+    { messageId: 'm1', message: { messageId: 'm1', content: '第一句', attachments: [{ content_type: 'text/plain' }] } },
+    { messageId: 'm2', message: { messageId: 'm2', content: '第二句', mentions: [{ nickname: 'a' }] } },
+  ]);
+  check('coalesce merges text/attachments/mentions',
+    merged && merged.content === '第一句\n第二句' && merged.attachments.length === 1
+    && merged.mentions.length === 1 && String(merged.messageId).startsWith('m2#coalesced'),
+    JSON.stringify(merged));
+  check('coalesce of empty list is null', mergeCoalescedMessages([]) === null);
 
   // 回归：引用消息的 content 是 [{type:'text'}] 数组，追加提示不能拼成 [object Object]。
   const stringContent = appendPromptPart('正文', '\n\n[系统提示] X');
