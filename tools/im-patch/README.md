@@ -864,10 +864,10 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **修复（代码，下次重启生效）**：`qq-bridge.mjs` 新增 `PROVOKE_PATTERN` + 提示注入——命中激将词时，在 prompt 末尾追加「对方在激你/怼你，这次优先用语音回应」。
 - 17 个测试全绿；TTS 健康检查通过。
 
-### 18.11 群 @ 识别补强 + 拆条阈值降到 40（2026-10-24 第七轮）
+### 18.11 群 @ 识别补强 + 拆条阈值降到 20（2026-10-24 第七轮）
 
 - **现象**：群友用 QQ 的 @ 真名点到 yuri，连发三条都没有回复；而纯文字里带「yuri/大肥鱼」的消息能正常回。
 - **原因**：群消息走的是全量 `GROUP_MESSAGE_CREATE`；正文里的 @ 标记是**群成员 openid**（如 `<@6FA4CEB7…>`），不是 appId，也不是 `mentions[].is_you`。`qq-mention.mjs` 只认「事件类型=GROUP_AT_MESSAGE_CREATE / mentions.is_you / `<@appId>`」三种，于是 @ 被当成普通消息丢掉。之前能回多半是「名字命中/接话窗口」，不是真的认出了 @。
-- **修复（代码，下次重启生效）**：`qq-bridge.mjs` 新增导出 `mentionsBotByName()`——`mentions[]` 里的 `nickname/username/name/card` 命中机器人自己的名字/别名（来自 `bot.json`）就算被叫到；`#shouldReply()` 的 `explicit` 与 `mentionsSelf` 都用它。认不出的 @ 会往 `~/.dsh/logs/dsh-im/` 写一条一次性诊断（rawEventType + mentions + content 片段），方便继续校准。
-- **拆条阈值**：不是没拆，是原来的 `maxChars=60`；截图那条回复只有 52 字（两句话）所以没拆。已把 `behavior.json → replyChunking.maxChars` 降到 **40**（热生效，不用重启），`behavior-config.mjs` 默认值同步改 40。40 字以上且 ≥2 句 → 拆成多条发送。
-- 回归：`test-chat-segments.mjs` 增补 52 字两句话在 40 阈值下拆 2 条；`test-media-intent.mjs` 增补 nickname 命中/不命中 3 项；17 个测试全绿。
+- **修复（代码，下次重启生效）**：`qq-bridge.mjs` 新增导出 `mentionsBotByName()`——`mentions[]` 里的 `nickname/username/name/card` 命中机器人自己的名字/别名（来自 `bot.json`）就算被叫到；`#shouldReply()` 的 `explicit` 与 `mentionsSelf` 都用它。认不出的 @ 会往 `~/.dsh/logs/dsh-im/` 写一条一次性诊断（rawEventType + mentions + 内容片段），方便继续校准。
+- **拆条阈值**：不是没拆，是原来的 `maxChars=60`；截图那条回复只有 52 字（两句话）所以没拆。现按主人要求改为 **20**：`behavior.json → replyChunking.maxChars = 20`（热生效，不用重启），`behavior-config.mjs` 默认值同步改 20。超过 20 字且 ≥2 句 → 拆成多条（实测 52 字回复拆成 2 条）。
+- 回归：`test-chat-segments.mjs` 增补 52 字两句话拆条用例；`test-media-intent.mjs` 增补 nickname 命中/不命中 3 项；17 个测试全绿。
