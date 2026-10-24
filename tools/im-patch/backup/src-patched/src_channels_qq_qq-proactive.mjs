@@ -174,7 +174,14 @@ function dayKeyFor(nowMs) {
 function ensureRecord(state, botId, dayKey) {
   const current = state.bots[botId];
   if (current && current.day === dayKey) return current;
-  const next = { day: dayKey, count: 0, lastSentAt: 0, fired: {} };
+  const next = {
+    day: dayKey,
+    count: 0,
+    lastSentAt: 0,
+    counts: {},
+    lastSentByTarget: {},
+    fired: {},
+  };
   state.bots[botId] = next;
   return next;
 }
@@ -251,11 +258,21 @@ export class QqProactiveScheduler {
     const slots = parseDailyTimes(config.dailyTimes);
     const firedKeys = [];
     let stateChanged = false;
+    // 全局日上限（跨目标安全阀）+ 每个目标自己的上限/冷却（2026-10-24 修复：
+    // 以前一个目标发过之后，全局 lastSentAt 会把同一次 tick 里的其他目标全挡掉，
+    // 导致「只发了一个群，私聊/别的群都没发」）。
+    const globalCap = Number(config.maxPerDay);
+    const perTargetCap = Number(config.maxPerDayPerTarget);
+    const perTargetCooldown = Number(config.minIntervalMinutesPerTarget ?? config.minIntervalMinutes);
 
     for (const targetKey of targets) {
       if (this.#allowed && !this.#allowed(targetKey)) continue;
-      const lastActivityMs = this.#activities.get(targetKey) ?? (this.#startedAt || 0);
+      if (Number.isFinite(globalCap) && globalCap > 0 && record.count >= globalCap) break;
+      const lastActivityMs = this.#activities.get(targetKey) ?? 0;
+      let targetCount = Number(record.counts?.[targetKey] ?? 0);
+      let targetLastSent = Number(record.lastSentByTarget?.[targetKey] ?? 0);
       for (const slotMinutes of slots) {
+        if (Number.isFinite(globalCap) && globalCap > 0 && record.count >= globalCap) break;
         const plannedMinutes = jitteredSlotMinutes({
           dailyMinutes: slotMinutes,
           dayKey,
@@ -272,10 +289,10 @@ export class QqProactiveScheduler {
           fired: firedMap[slotLabel] === dayKey,
           quietMinutes: config.quietMinutes,
           lastActivityMs,
-          lastSentMs: record.lastSentAt,
-          minIntervalMinutes: config.minIntervalMinutes,
-          maxPerDay: config.maxPerDay,
-          countToday: record.count,
+          lastSentMs: targetLastSent,
+          minIntervalMinutes: Number.isFinite(perTargetCooldown) ? perTargetCooldown : config.minIntervalMinutes,
+          maxPerDay: Number.isFinite(perTargetCap) && perTargetCap > 0 ? perTargetCap : globalCap,
+          countToday: targetCount,
           probability: config.probability,
           roll: Math.random(),
         });
@@ -285,21 +302,25 @@ export class QqProactiveScheduler {
         try {
           await this.#send(targetKey, text);
           this.#sentTotal += 1;
+          targetCount += 1;
+          targetLastSent = nowMs;
           record.count += 1;
           record.lastSentAt = nowMs;
+          record.counts = { ...(record.counts ?? {}), [targetKey]: targetCount };
+          record.lastSentByTarget = { ...(record.lastSentByTarget ?? {}), [targetKey]: nowMs };
           record.fired[targetKey] = { ...firedMap, [slotLabel]: dayKey };
           stateChanged = true;
           firedKeys.push(`${targetKey}|${slotLabel}`);
           this.#logger.info?.(`[dsh-im:qq] proactive message sent (${targetKey} ${slotLabel})`);
+          // 多个目标之间稍作间隔，避免同一秒连发。
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         } catch (error) {
           this.#logger.warn?.(`[dsh-im:qq] proactive message failed (${targetKey} ${slotLabel}):`, error?.message ?? error);
           // Mark the slot as consumed so a broken target cannot retry every tick.
           record.fired[targetKey] = { ...firedMap, [slotLabel]: dayKey };
           stateChanged = true;
         }
-        if (record.count >= config.maxPerDay) break;
       }
-      if (record.count >= config.maxPerDay) break;
     }
     if (stateChanged) saveState(state);
     return firedKeys;

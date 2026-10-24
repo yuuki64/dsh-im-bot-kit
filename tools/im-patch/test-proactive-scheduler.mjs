@@ -1,7 +1,7 @@
 // Offline self-test for the proactive scheduler (no DSH / no QQ needed).
 //
 //   node tools/im-patch/test-proactive-scheduler.mjs
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,10 +21,16 @@ function check(label, condition, detail = '') {
   if (!condition) failures.push(label);
 }
 
+// readBehaviorConfig caches by mtimeMs; tests rewrite the file within the same
+// millisecond, so force a strictly increasing mtime after every write.
+let mtimeTick = Date.now() + 1000;
 function writeBehavior(document) {
   const dir = join(tempHome, 'integrations', 'dsh-im');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'behavior.json'), `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+  const path = join(dir, 'behavior.json');
+  writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+  mtimeTick += 1000;
+  utimesSync(path, new Date(mtimeTick), new Date(mtimeTick));
 }
 
 try {
@@ -125,6 +131,48 @@ try {
   });
   const capped = await scheduler.tick();
   check('daily cap blocks the second target', capped.length === 0, JSON.stringify(capped));
+
+  // 两个目标应当在同一个 tick 里各发一次（旧的全局 lastSentAt 会只发第一个）。
+  const now2 = new Date();
+  now2.setHours(7, 10, 0, 0);
+  const nowMs2 = now2.getTime();
+  writeBehavior({
+    version: 1,
+    proactive: {
+      enabled: true,
+      dailyTimes: ['07:00'],
+      jitterMinutes: 0,
+      windowMinutes: 120,
+      quietMinutes: 0,
+      minIntervalMinutes: 120,
+      minIntervalMinutesPerTarget: 120,
+      maxPerDay: 9,
+      maxPerDayPerTarget: 3,
+      probability: 1,
+      bots: {
+        'bot-multi': {
+          enabled: true,
+          targets: ['group:A', 'group:B', 'c2c:OWNER'],
+          texts: { '07:00': ['到点了。'] },
+        },
+      },
+    },
+  });
+  const sentMulti = [];
+  const multi = new QqProactiveScheduler({
+    botId: 'bot-multi',
+    now: () => nowMs2,
+    send: async (key, text) => { sentMulti.push([key, text]); },
+    allowed: () => true,
+  });
+  const multiFired = await multi.tick();
+  check('every target gets its own message in the same tick',
+    sentMulti.length === 3 && multiFired.length === 3
+    && sentMulti.map(([key]) => key).sort().join(',') === 'c2c:OWNER,group:A,group:B',
+    JSON.stringify(sentMulti));
+  const multiAgain = await multi.tick();
+  check('per-target slots are not re-sent', multiAgain.length === 0 && sentMulti.length === 3, JSON.stringify(multiAgain));
+  multi.stop();
 
   // Disabled config never sends.
   writeBehavior({ version: 1, proactive: { enabled: false } });
