@@ -20,7 +20,19 @@ function check(label, condition, detail = '') {
 try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
+    appendPromptPart,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  // 回归：引用消息的 content 是 [{type:'text'}] 数组，追加提示不能拼成 [object Object]。
+  const stringContent = appendPromptPart('正文', '\n\n[系统提示] X');
+  check('append instruction to string content', stringContent === '正文\n\n[系统提示] X', JSON.stringify(stringContent));
+  const arrayContent = appendPromptPart([{ type: 'text', text: '引用块' }, { type: 'text', text: '正文' }], '\n\n[系统提示] X');
+  check('append instruction to structured content',
+    Array.isArray(arrayContent) && arrayContent.length === 3
+    && arrayContent[2].type === 'text' && arrayContent[2].text === '\n\n[系统提示] X'
+    && !JSON.stringify(arrayContent).includes('[object Object]'),
+    JSON.stringify(arrayContent));
+  check('append instruction to missing content', appendPromptPart(undefined, 'X') === undefined);
 
   check('quote of own message matches',
     matchesOwnText('他就发个表情，我接啥', ['他就发个表情，我接啥']) === true);
