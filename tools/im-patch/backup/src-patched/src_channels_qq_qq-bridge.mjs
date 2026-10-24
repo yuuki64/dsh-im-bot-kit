@@ -595,11 +595,19 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl must be a function');
   const images = [];
   const files = [];
+  const voiceNotes = [];
   for (const attachment of message?.attachments ?? []) {
     const url = nonEmptyString(attachment?.url);
     const name = nonEmptyString(attachment?.filename) ?? undefined;
     const mediaType = attachmentMediaType(attachment);
     const declaredSize = Number(attachment?.size);
+    // 本地补丁（2026-10-24）：语音消息用 QQ 自带的 asr_refer_text 转成文字，
+    // 不再把 .amr/.silk 当普通文件塞给模型（模型没法播放，只会回“放不了”）。
+    if (qqAttachmentKind(attachment) === 'audio') {
+      const transcript = nonEmptyString(attachment?.asr_refer_text);
+      voiceNotes.push(transcript ? `[语音] ${transcript}` : '[语音消息（没有可用的转写文字）]');
+      continue;
+    }
     if (isQqImageAttachment(attachment)) {
       images.push({
         ...(name ? { name } : {}),
@@ -628,8 +636,10 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
     });
   }
   const replyTo = qqReplyReference(message);
+  const baseText = safeText(message);
+  const content = [baseText, ...voiceNotes].filter(Boolean).join('\n');
   return {
-    content: safeText(message),
+    content,
     images,
     files,
     ...(replyTo ? { replyTo } : {}),
