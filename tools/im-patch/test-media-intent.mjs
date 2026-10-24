@@ -18,7 +18,13 @@ function check(label, condition, detail = '') {
 }
 
 try {
-  const { extractMediaIntent } = await import(src('src/channels/qq/qq-bridge.mjs'));
+  const { extractMediaIntent, mentionsBotByName } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  check('mention by nickname matches bot name',
+    mentionsBotByName({ mentions: [{ nickname: 'yuri' }] }, ['yuri', '小鲸鱼']) === true);
+  check('mention by other nickname is not us',
+    mentionsBotByName({ mentions: [{ nickname: '初童新月' }] }, ['yuri', '小鲸鱼']) === false);
+  check('mention without names is not us', mentionsBotByName({ mentions: [] }, ['yuri']) === false);
 
   const plain = extractMediaIntent('就一句话。');
   check('plain text has no voice', plain.voiceTexts.length === 0 && plain.voiceText === null, JSON.stringify(plain));
