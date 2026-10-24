@@ -914,3 +914,18 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - 修复：**c2c（私聊）目标不打散**，固定按整点发（07:45 / 11:45 / 17:45），窗口 90 分钟，重启晚到也能发。群目标仍保留 ±25 分钟打散 + 30 分钟安静要求（避免打扰聊天）。
 
 **注意**：这两个修复都是代码改动，需要重启一次 DSH 生效。
+
+### 18.15 AI 主动冒泡（群安静时模型自己开口，2026-10-24 第十一轮）
+
+**需求**：模板主动消息太机械、频率低；要像真人一样「群里安静时自己冒个泡」。
+
+**设计**（`behavior.json → proactive.aiBubbles`）：
+- 每个群独立计时：每 `checkIntervalMinutes`（45）± `jitterMinutes`（20）检查一次；
+- 条件：群安静 ≥ `quietMinutes`（15）、落在 `hours`（08:00–23:00）、概率 `probability`（0.35）、距上次冒泡 ≥ `minIntervalMinutes`（60）、每群每天 ≤ `maxPerDayPerTarget`（6）、全局每天 ≤ `maxPerDay`（12）；
+- 触发时由 `QqHarnessBridge.generateProactiveBubble(key)` 在该群**现有会话**里跑一轮模型：prompt 要求「像平时一样短（1~2 句、≤40 字），结合上下文自然开口，不要提主动机会/系统提示；不想说就输出 `<dsh_im_silent/>`」；返回 null（沉默/失败）则本次不发；
+- 实现链路：`qq-proactive.mjs`（bubble 调度 + 状态 `bubbleCounts/bubbleLastAt/bubbleNextAt`）→ `qq-runtime.mjs`（`onBubble` 回调 + 发送）→ `qq-bridge.mjs`（生成）。
+- 模板主动消息同时回落到每天 3 个时段（07:45/11:45/17:45，概率 0.7、每目标每天 3 条），把频率空间让给 AI 冒泡。
+
+**成本**：每次冒泡约 1 万 token（≈0.2~0.4 分），按上面上限预计每群每天 2~5 条、每 bot 约 1~3 分钱/天；对话活跃时 `quietMinutes` 会自动跳过。
+
+**回归**：`test-proactive-scheduler.mjs` 增补「安静 + 概率 1 时冒泡一次」「遵守下次检查间隔」两项；17 个测试全绿。**代码改动需重启一次 DSH。**

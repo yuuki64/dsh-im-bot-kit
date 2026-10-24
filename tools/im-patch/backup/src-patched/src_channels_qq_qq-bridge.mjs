@@ -1255,6 +1255,37 @@ export class QqHarnessBridge {
   }
 
   /**
+   * 本地补丁（2026-10-24）：AI 主动冒泡——在该会话里让模型结合上下文主动说一句。
+   * 返回 null 表示模型选择沉默（<dsh_im_silent/>）或生成失败。
+   */
+  async generateProactiveBubble(key, { quietMinutes = 15 } = {}) {
+    const prompt = `【主动发言机会】这个会话已经安静了大约 ${quietMinutes} 分钟。你可以选择主动说一句话，也可以不说。要求：像平时一样短（1~2 句、≤40 字），结合你们之前的聊天自然开口；不要提“主动机会/系统提示/冒泡/我来看看”这类词，不要用模板句式；觉得没必要就只输出 <dsh_im_silent/>。`;
+    try {
+      const { answer } = await askInWorkspaceSession({
+        harness: this.#harness,
+        state: this.#state,
+        key,
+        text: prompt,
+        sourceGuidance: applyPersona(undefined, { botId: this.#botId }),
+        timeoutMs: this.#replyTimeoutMs,
+        signal: this.#signal,
+        askOptions: {
+          timeoutMs: this.#replyTimeoutMs,
+          signal: this.#signal,
+          control: { owner: this, key },
+          progressMode: 'final',
+          finalAnswerOnly: true,
+        },
+      });
+      const intent = extractMediaIntent(answer);
+      return intent.silent ? null : (intent.text || null);
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] proactive bubble generation failed:', error?.message ?? error);
+      return null;
+    }
+  }
+
+  /**
    * 本地补丁：watch 模式——没叫机器人时也把这条消息递给他看一眼，
    * 由 AI 自己决定接不接（不需要就在回复里只输出 <dsh_im_silent/>）。
    * 限速与开关都在 behavior.json → watch；默认关闭。

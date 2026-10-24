@@ -71,6 +71,19 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     minIntervalMinutesPerTarget: 120,
     maxPerDayPerTarget: 3,
     probability: 0.85,
+    // 2026-10-24：AI 主动冒泡（群安静时让模型结合上下文自己说一句，而不是发模板）。
+    aiBubbles: Object.freeze({
+      enabled: false,
+      includeDirect: false,
+      checkIntervalMinutes: 45,
+      jitterMinutes: 20,
+      quietMinutes: 15,
+      probability: 0.35,
+      minIntervalMinutes: 60,
+      maxPerDayPerTarget: 6,
+      maxPerDay: 12,
+      hours: Object.freeze({ start: 8, end: 23 }),
+    }),
     bots: Object.freeze({}),
   }),
 });

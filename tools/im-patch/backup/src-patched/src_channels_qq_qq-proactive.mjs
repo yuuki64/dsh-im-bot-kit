@@ -181,6 +181,9 @@ function ensureRecord(state, botId, dayKey) {
     counts: {},
     lastSentByTarget: {},
     fired: {},
+    bubbleCounts: {},
+    bubbleLastAt: {},
+    bubbleNextAt: {},
   };
   state.bots[botId] = next;
   return next;
@@ -197,8 +200,11 @@ export class QqProactiveScheduler {
   #startedAt = 0;
   #lastTickAt = 0;
   #sentTotal = 0;
+  #onBubble = null;
 
-  constructor({ botId, send, logger = console, allowed = null, now = () => Date.now() }) {
+  constructor({
+    botId, send, logger = console, allowed = null, now = () => Date.now(), onBubble = null,
+  }) {
     if (typeof botId !== 'string' || !botId) throw new TypeError('botId is required');
     if (typeof send !== 'function') throw new TypeError('send must be a function');
     this.#botId = botId;
@@ -206,6 +212,7 @@ export class QqProactiveScheduler {
     this.#logger = logger;
     this.#allowed = typeof allowed === 'function' ? allowed : null;
     this.#now = now;
+    this.#onBubble = typeof onBubble === 'function' ? onBubble : null;
   }
 
   /** Record inbound activity so "quiet group" can be checked cheaply. */
@@ -321,6 +328,56 @@ export class QqProactiveScheduler {
           // Mark the slot as consumed so a broken target cannot retry every tick.
           record.fired[targetKey] = { ...firedMap, [slotLabel]: dayKey };
           stateChanged = true;
+        }
+      }
+    }
+    // ---- AI 主动冒泡（群安静时让模型结合上下文自己说一句，而不是发模板）----
+    const bubbles = config.aiBubbles;
+    if (bubbles?.enabled && this.#onBubble) {
+      const hour = new Date(nowMs).getHours();
+      const startHour = Number(bubbles.hours?.start ?? 8);
+      const endHour = Number(bubbles.hours?.end ?? 23);
+      const inHours = startHour <= endHour
+        ? (hour >= startHour && hour < endHour)
+        : (hour >= startHour || hour < endHour);
+      if (inHours) {
+        const globalBubbleCap = Number(bubbles.maxPerDay) || 12;
+        const perTargetBubbleCap = Number(bubbles.maxPerDayPerTarget) || 6;
+        const intervalMinutes = Math.max(5, Number(bubbles.checkIntervalMinutes) || 45);
+        const jitter = Math.max(0, Number(bubbles.jitterMinutes) || 20);
+        const quietMs = Math.max(1, Number(bubbles.quietMinutes) || 15) * 60_000;
+        const minBetweenMs = Math.max(0, Number(bubbles.minIntervalMinutes) || 60) * 60_000;
+        for (const targetKey of targets) {
+          if (!targetKey.startsWith('group:') && bubbles.includeDirect !== true) continue;
+          if (this.#allowed && !this.#allowed(targetKey)) continue;
+          const bubbleTotal = Object.values(record.bubbleCounts ?? {})
+            .reduce((sum, value) => sum + (Number(value) || 0), 0);
+          if (bubbleTotal >= globalBubbleCap) break;
+          const nextAt = Number(record.bubbleNextAt?.[targetKey] ?? 0);
+          if (nowMs < nextAt) continue;
+          const targetCount = Number(record.bubbleCounts?.[targetKey] ?? 0);
+          if (targetCount >= perTargetBubbleCap) continue;
+          // 不管这次开不开口，都排下一次检查（± jitter）。
+          const nextDelay = (intervalMinutes + (Math.random() * 2 - 1) * jitter) * 60_000;
+          record.bubbleNextAt = { ...(record.bubbleNextAt ?? {}), [targetKey]: nowMs + nextDelay };
+          stateChanged = true;
+          const lastActivityMs = this.#activities.get(targetKey) ?? 0;
+          if (lastActivityMs && nowMs - lastActivityMs < quietMs) continue;
+          const lastBubbleAt = Number(record.bubbleLastAt?.[targetKey] ?? 0);
+          if (lastBubbleAt && nowMs - lastBubbleAt < minBetweenMs) continue;
+          if (Math.random() >= (Number(bubbles.probability) || 0)) continue;
+          try {
+            const result = await this.#onBubble(targetKey);
+            if (result && result.sent !== false) {
+              record.bubbleCounts = { ...(record.bubbleCounts ?? {}), [targetKey]: targetCount + 1 };
+              record.bubbleLastAt = { ...(record.bubbleLastAt ?? {}), [targetKey]: nowMs };
+              this.#sentTotal += 1;
+              firedKeys.push(`${targetKey}|bubble`);
+              this.#logger.info?.(`[dsh-im:qq] AI proactive bubble sent (${targetKey})`);
+            }
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] AI proactive bubble failed:', error?.message ?? error);
+          }
         }
       }
     }

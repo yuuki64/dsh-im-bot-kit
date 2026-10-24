@@ -12,6 +12,7 @@ import {
 import { t } from '../shared/i18n.mjs';
 import { evaluateInboundAccess } from '../shared/inbound-access.mjs';
 import { readSwitchState } from '../shared/im-switch.mjs';
+import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { createQqProactiveScheduler } from './qq-proactive.mjs';
 import { createQqBridgeStatus, QqHarnessBridge } from './qq-bridge.mjs';
 import { isQqMessageAddressed, normalizeQqMentions } from './qq-mention.mjs';
@@ -173,6 +174,30 @@ export class QqRuntime {
     }
   }
 
+  /**
+   * 本地补丁：AI 主动冒泡。让 bridge 在该会话里跑一轮模型生成，再作为普通消息发出。
+   * @returns {Promise<{sent: boolean, text?: string}>}
+   */
+  async #generateProactiveBubble(targetKey) {
+    const match = /^(group|c2c):(.+)$/u.exec(String(targetKey ?? ''));
+    if (!match) return { sent: false };
+    if (!this.#status.ready || !this.#bot || !this.#bridge) return { sent: false };
+    let quietMinutes = 15;
+    try {
+      quietMinutes = Number(readBehaviorConfig().proactive?.aiBubbles?.quietMinutes) || 15;
+    } catch {
+      // config read failure keeps the default
+    }
+    const text = await this.#bridge.generateProactiveBubble(targetKey, { quietMinutes });
+    if (!text) return { sent: false };
+    const target = { scope: match[1] === 'c2c' ? 'c2c' : 'group', targetId: match[2] };
+    await this.#bot.sendText(target, text);
+    this.#status.messagesReplied += 1;
+    this.#status.lastReplyAt = new Date().toISOString();
+    this.#logger.info?.(`[dsh-im:qq] AI proactive bubble delivered (${targetKey}): ${text.slice(0, 40)}`);
+    return { sent: true, text };
+  }
+
   #startProactiveScheduler() {
     if (this.#proactive) return;
     try {
@@ -189,6 +214,8 @@ export class QqRuntime {
           this.#status.messagesReplied += 1;
           this.#status.lastReplyAt = new Date().toISOString();
         },
+        // AI 主动冒泡：群安静时让模型结合上下文说一句（内容由模型生成，不是模板）。
+        onBubble: (key) => this.#generateProactiveBubble(key),
       });
       scheduler.start();
       this.#proactive = scheduler;
