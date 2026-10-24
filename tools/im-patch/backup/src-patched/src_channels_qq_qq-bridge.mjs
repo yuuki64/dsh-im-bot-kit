@@ -560,12 +560,12 @@ export function isClosingMessage(text) {
  */
 export function formatChatDigest(entries, {
   now = Date.now(), minutes = 15, limit = 25, maxChars = 40, excludeMessageId = null,
-  current = null, limitBefore = 8, limitAfter = 5,
+  current = null, limitBefore = 25, limitAfter = 4,
 } = {}) {
   const windowMs = Math.max(1, Number(minutes) || 15) * 60_000;
   const width = Math.max(8, Number(maxChars) || 40);
-  const maxBefore = Math.max(1, Number(limitBefore) || 8);
-  const maxAfter = Math.max(1, Number(limitAfter) || 5);
+  const maxBefore = Math.max(1, Number(limitBefore) || 25);
+  const maxAfter = Math.max(1, Number(limitAfter) || 4);
   const all = (Array.isArray(entries) ? entries : [])
     .filter((entry) => entry && (excludeMessageId === null || entry.messageId !== excludeMessageId))
     .filter((entry) => now - (Number(entry.at) || 0) <= windowMs);
@@ -1615,6 +1615,8 @@ export class QqHarnessBridge {
       now: Date.now(),
       minutes: 15,
       maxChars: 40,
+      limitBefore: 25,
+      limitAfter: 4,
       current: {
         messageId,
         at: Number(message?.__receivedAt) || 0,
