@@ -71,6 +71,26 @@ try {
       { senderName: 'a', text: 'old', at: nowMs - 30 * 60_000 },
     ], { now: nowMs, minutes: 15, current: { text: 'now' } }) === '');
 
+  // 前 25 条 / 后 4 条：历史只保留最近 25 条，当前之后最多 4 条。
+  const manyEntries = [];
+  for (let index = 0; index < 30; index += 1) {
+    manyEntries.push({ senderName: `u${index}`, text: `before-${index}`, at: nowMs - (60 - index) * 1000 });
+  }
+  manyEntries.push({ messageId: 'cur2', senderName: 'owner', text: 'current', at: nowMs });
+  for (let index = 0; index < 6; index += 1) {
+    manyEntries.push({ senderName: `a${index}`, text: `after-${index}`, at: nowMs + (index + 1) * 1000 });
+  }
+  const wideDigest = formatChatDigest(manyEntries, {
+    now: nowMs + 10_000,
+    minutes: 60,
+    current: { messageId: 'cur2', senderName: 'owner', text: 'current' },
+  });
+  check('digest keeps only the newest 25 before-current lines',
+    !wideDigest.includes('before-0') && wideDigest.includes('before-29'), JSON.stringify(wideDigest).slice(0, 300));
+  check('digest keeps at most 4 after-current lines',
+    wideDigest.includes('after-0') && wideDigest.includes('after-3') && !wideDigest.includes('after-4'),
+    JSON.stringify(wideDigest).slice(-200));
+
   check('quote of own message matches',
     matchesOwnText('他就发个表情，我接啥', ['他就发个表情，我接啥']) === true);
   check('quote with different punctuation matches',
