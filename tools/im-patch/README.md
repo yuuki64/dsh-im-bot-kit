@@ -809,19 +809,25 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 
 **做法**：在 desktop profile 的 `cordis.patch.yml` 末尾追加一个 `@deepseek-ai/dsh-agent-preset` 行（id `qq-bot`），它只挂：
 - `tool-web`（search/fetch）、`tool-ask-user`（提问转发）
-- `qq-bot-restrict.mjs`（profile 根目录）：`ctx.tools.restrict({ allow: ['ask_user_question','web_search','web_fetch'] })`，把继承来的其余全局工具从 schema 里隐藏
+- `qq-bot-restrict.mjs`（profile 根目录）：v2 用 `ctx.tools.restrict({ allow: [] })` 隐藏**全部继承的全局工具**；失败则用探测错误里的 `known global tools:` 清单改走 deny 名单，并在 5s/15s 补两轮（防 MCP 晚注册）。**v1 教训**：`allow` 里写 `web_search`/`ask_user_question` 会因「未知全局工具」整条抛错 → 一条都没藏住（103k 只降到 103k）。
 - compaction 组（compaction-basic / command-compact / tool-result-pruner）
 
 **落地文件**：
-- `%USERPROFILE%\.dsh\profiles\desktop\qq-bot-restrict.mjs`（新增，~25 行）
-- `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`（末尾追加 preset 行）
+- 权威源（仓库内）：`tools\im-patch\qq-bot-preset\qq-bot-restrict.mjs` + `cordis.patch.append.yml`
+- 实际安装：`%USERPROFILE%\.dsh\profiles\desktop\qq-bot-restrict.mjs`（+ `cordis.patch.yml` 末尾追加 preset 行）
 - 备份：`cordis.patch.yml.bak-before-qq-bot-preset-20261024`
 - 一键回滚：`tools\im-patch\回滚-qq-bot-preset.bat`（还原 patch + 删插件，然后重启 DSH）
+- 运行日志：`%USERPROFILE%\.dsh\logs\qq-bot-restrict.log`（每次启动写 initial / retry 结果）
 
 **启用步骤**（DSH 重启后；preset 只在新建会话生效，旧会话不变）：
 1. 用主人 QQ 私聊机器人：`/presetlist` → 找到「QQ 聊天机器人（qq-bot）」的序号；
 2. `/preset <序号>`（或 `/preset qq-bot`）；
 3. 对每个想换的群/私聊发 `/new` 重建会话（**会清空该会话上下文**，介意就等它自然新建）；
-4. 之后新会话的 `contextBreakdown.toolsTokens` 应从 ~110k 降到 1k 以内（可用 `_analysis` 里的会话投影方法核对）。
+4. 新会话的 `contextBreakdown.toolsTokens` 从 ~110k 降到 1k 左右，可用会话投影核对。
+
+**实测（2026-10-24 14:35，DSH 0.2.1-rc.2）**：
+- 旧会话（standard）：`toolsTokens 109,722` / `system 7,232` / 单轮 cacheRead ≈ 159k；
+- 新会话（qq-bot）：`toolsTokens 1,207` / `system 6,470` / 首轮 `uncachedInput 10,549 + cacheRead 11,008`，**工具面 -98.9%**；机器人回复正常（「什么事？说吧」）。
+- `~/.dsh/logs/qq-bot-restrict.log` 三行都是 `ok allow=[]`。
 
 **风险与回滚**：`tools.restrict` 若在当前 DSH 版本报错，插件只打印日志、不阻塞启动（退化为不省 token）；若 preset 行导致 DSH 起不来，双击回滚 .bat 后重启即可。
