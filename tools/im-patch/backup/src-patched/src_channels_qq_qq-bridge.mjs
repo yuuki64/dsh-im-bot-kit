@@ -1350,15 +1350,16 @@ export class QqHarnessBridge {
   #allowWatch(message, key) {
     const config = readBehaviorConfig().watch;
     if (!config?.enabled) return false;
-    if (message?.senderIsBot === true) return false;
     // 只让配置里列出的 bot 参与 watch（空数组 = 所有 bot；同群两个 bot 同时 watch 会一起接话）。
     if (Array.isArray(config.botIds) && config.botIds.length > 0
       && !config.botIds.includes(this.#botId)) return false;
     const text = safeText(message);
-    // 本地补丁：主人单独发的消息（可能很短、也可能是表情/图片）一律进入“看一眼”，
-    // 由 AI 结合上下文判断是不是在跟它说话。其他群友的短碎片仍然不看。
+    // 本地补丁（2026-10-24）：everyone=true 时，所有人的消息（含其他机器人）都进入“看一眼”，
+    // 由 AI 结合上下文判断是不是在跟它说话；否则只有主人消息放宽。
+    const everyoneReview = config.everyone === true;
     const ownerMessage = isOwnerSender(message, this.#ownerUserOpenid);
-    const ownerImage = ownerMessage && hasQqImageAttachments(message);
+    const fullReview = everyoneReview || ownerMessage;
+    const ownerImage = fullReview && hasQqImageAttachments(message);
     // 本地补丁：引用/回复消息也交给 AI 判断（引用的是机器人自己→该回；引用别人→静默）。
     // 不依赖内存里的 #botTexts，重启前的旧消息被引用也能识别。
     const quoteRef = Boolean(qqReplyReference(message));
@@ -1366,7 +1367,7 @@ export class QqHarnessBridge {
     if (!text && !ownerImage && !quoteRef) return false;
     const trimmed = text.trim();
     // 太短 / 纯符号的碎片（「你就是」「？」「草」）不watch，避免替别人脑补接话。
-    if (!ownerMessage && !quoteRef) {
+    if (!fullReview && !quoteRef) {
       const minChars = Number(config.minChars);
       if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
       if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
@@ -1383,7 +1384,7 @@ export class QqHarnessBridge {
       : null;
     if (text && Array.isArray(topics) && topics.length > 0
       && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return false;
-    if (!ownerMessage && !quoteRef && config.textOnly !== false
+    if (!fullReview && !quoteRef && config.textOnly !== false
       && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
     if (message.kind === 'c2c' && config.direct !== true) return false;
     if (message.kind === 'group') {
@@ -1396,7 +1397,7 @@ export class QqHarnessBridge {
     // 活跃群模式：最近 activityWindowMinutes 分钟内至少 activityMinMessages 条才“看一眼”。
     const activityWindow = Number(config.activityWindowMinutes);
     const activityMin = Number(config.activityMinMessages);
-    if (!ownerMessage && !quoteRef && Number.isFinite(activityWindow) && activityWindow > 0
+    if (!fullReview && !quoteRef && Number.isFinite(activityWindow) && activityWindow > 0
       && Number.isFinite(activityMin) && activityMin > 0) {
       const nowForActivity = Date.now();
       const recentCount = (this.#recentChat.get(key) ?? [])
@@ -1506,7 +1507,9 @@ export class QqHarnessBridge {
     const explicitAddress = isQqMessageAddressed(message)
       || isNameMentioned(message, this.#nameMentionPattern);
     if (message.senderIsBot === true && !explicitAddress && !this.#isEngaged(message, key)) {
-      return Promise.resolve();
+      // 本地补丁：everyone 模式下，其他机器人的消息也要递进来判断。
+      const watchConfig = readBehaviorConfig().watch;
+      if (!(watchConfig?.enabled && watchConfig.everyone === true)) return Promise.resolve();
     }
     const addressed = this.#shouldReply(message, key);
     if (addressed && !this.#allowBotReply(message, key)) return Promise.resolve();
@@ -2579,9 +2582,12 @@ export class QqHarnessBridge {
           || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准；⑤ 别人在讨论你的提示词/人设/设定（那不是在跟你说话）。想接就正常回一两句，不要提这条提示。';
         // 主人单独发的消息（可能很短/只是表情）：放宽为“结合上下文判断是不是在叫我”。
         const ownerWatch = isOwnerSender(message, this.#ownerUserOpenid);
-        const ownerExtra = ownerWatch
-          ? '\n这条是主人单独发的消息：结合上下文判断是不是在跟你说话——像「不理我」「在吗」「说话」这类就是在叫你要回；明显在跟别人说或自言自语才静默。'
-          : '';
+        const everyoneReview = watchConfig?.everyone === true;
+        const ownerExtra = everyoneReview
+          ? '\n这条消息可能来自任何人（包括其他机器人）：结合上下文判断是不是在跟你说话、或和你有关——是就自然接一句，没关系/拿不准就静默；别人在讨论你的设定/提示词时不要接。'
+          : ownerWatch
+            ? '\n这条是主人单独发的消息：结合上下文判断是不是在跟你说话——像「不理我」「在吗」「说话」这类就是在叫你要回；明显在跟别人说或自言自语才静默。'
+            : '';
         const instruction = `${baseInstruction}${ownerExtra}`;
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;

@@ -48,6 +48,8 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
   }),
   watch: Object.freeze({
     enabled: false,
+    // 所有人（含其他机器人）的消息都进入“看一眼”，由 AI 判断是否在跟它说话。
+    everyone: false,
     groups: Object.freeze([]),
     direct: false,
     textOnly: true,
