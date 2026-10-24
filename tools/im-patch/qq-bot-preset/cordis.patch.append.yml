@@ -1,0 +1,40 @@
+# 追加到 %USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml 末尾（2026-10-24）
+#
+# 前置：把 qq-bot-restrict.mjs 放到 %USERPROFILE%\.dsh\profiles\desktop\ 下。
+# 备份：同目录 cordis.patch.yml.bak-before-qq-bot-preset-20261024
+# 回滚：tools\im-patch\回滚-qq-bot-preset.bat（还原备份 + 删插件）→ 重启 DSH
+# 启用：重启 DSH → 主人私聊机器人 /presetlist → /preset qq-bot → 对每个群 /new（清空该会话上下文）
+# 实测（2026-10-24 14:35，DSH 0.2.1-rc.2）：新会话 toolsTokens 109,722 → 1,207（-98.9%）
+- insert:
+    - id: preset-qq-bot
+      name: "@deepseek-ai/dsh-agent-preset"
+      config:
+        id: qq-bot
+        name: QQ 聊天机器人
+        description: QQ/微信机器人专用：无本地工具、无重型 MCP，仅保留搜索/提问与上下文压缩。
+        order: 20
+        plugins:
+          - id: tool-web
+            name: "@deepseek-ai/dsh-tool-web"
+          - id: tool-ask-user
+            name: "@deepseek-ai/dsh-tool-ask-user"
+          - id: qq-bot-restrict
+            name: ./qq-bot-restrict.mjs
+            config: {}
+          - id: compaction
+            name: "cordis:group"
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: "@deepseek-ai/dsh-compaction-basic"
+              - id: command-compact
+                name: "@deepseek-ai/dsh-command-compact"
+              - id: tool-result-pruner
+                name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
+                config:
+                  thresholdChars: 50000
+                  headChars: 45000
+                  tailChars: 2000
