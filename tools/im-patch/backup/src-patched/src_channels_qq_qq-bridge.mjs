@@ -107,6 +107,7 @@ import { ensureGpuTts, gpuTtsAvailable, gpuTtsHealth, stopGpuTts } from '../shar
 import { ensureGsv, gsvHealth, isGsvAvailable, stopGsv } from '../shared/gsv-tts.mjs';
 import {
   allowStickerCollection,
+  inferStickerTags,
   isCollectableSticker,
   pickSticker,
   saveSticker,
@@ -339,7 +340,10 @@ function quotedImageName(name, index) {
   return `引用-${base}`;
 }
 
-const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/iu;
+// 被逼急时可以连发多条语音：一次回复里最多 3 个 <dsh_im_voice> 标签，
+// 每条标签发一条语音（插件不合并、不改字）。
+const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/giu;
+const MAX_VOICE_MESSAGES = 3;
 const STICKER_TAG_PATTERN = /<dsh_im_sticker>([\s\S]*?)<\/dsh_im_sticker>/iu;
 // "I have nothing to say" — the model emits this instead of writing a meta line
 // such as "（此处不回复）", which used to be sent to the chat verbatim.
@@ -348,19 +352,23 @@ const SILENT_TAG_TEST = /<dsh_im_silent\s*\/?>/iu;
 const SILENT_TEXT_PATTERN = /^[（(【\[]\s*(?:此处)?不回复\s*[）)】\]]$/u;
 
 /**
- * Split a final answer into user-facing text plus optional spoken line and
+ * Split a final answer into user-facing text plus optional spoken lines and a
  * sticker request. Tags are stripped regardless of order.
+ *
+ * 本地补丁（2026-10-24）：`<dsh_im_voice>` 可以出现多次（最多 3 条），
+ * 对应「被逼急了连发语音」；`voiceText` 保留第一条兼容旧调用点。
  */
 export function extractMediaIntent(text) {
   const raw = typeof text === 'string' ? text : '';
   let rest = raw;
-  let voiceText = null;
   let stickerQuery = null;
-  const voiceMatch = VOICE_TAG_PATTERN.exec(rest);
-  if (voiceMatch) {
-    voiceText = voiceMatch[1].trim() || null;
-    rest = rest.slice(0, voiceMatch.index) + rest.slice(voiceMatch.index + voiceMatch[0].length);
+  const voiceTexts = [];
+  // matchAll 内部克隆正则，不会打乱后面 replace 的状态。
+  for (const match of rest.matchAll(VOICE_TAG_PATTERN)) {
+    const value = match[1].trim();
+    if (value && voiceTexts.length < MAX_VOICE_MESSAGES) voiceTexts.push(value);
   }
+  rest = rest.replace(VOICE_TAG_PATTERN, '');
   const stickerMatch = STICKER_TAG_PATTERN.exec(rest);
   if (stickerMatch) {
     stickerQuery = stickerMatch[1].trim();
@@ -369,10 +377,13 @@ export function extractMediaIntent(text) {
   const hadSilentTag = SILENT_TAG_TEST.test(rest);
   rest = rest.replace(SILENT_TAG_PATTERN, '');
   const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
-  const silent = trimmed === '' ? hadSilentTag : SILENT_TEXT_PATTERN.test(trimmed);
+  // 有语音/表情要发时不算「静默」：静默只在什么都不发时成立。
+  const hasMedia = voiceTexts.length > 0 || stickerQuery !== null;
+  const silent = !hasMedia && (trimmed === '' ? hadSilentTag : SILENT_TEXT_PATTERN.test(trimmed));
   return {
     text: silent ? '' : trimmed,
-    voiceText,
+    voiceText: voiceTexts[0] ?? null,
+    voiceTexts,
     stickerQuery,
     silent,
   };
@@ -1121,7 +1132,11 @@ export class QqHarnessBridge {
         return null;
       });
       if (!bytes) continue;
-      const result = await saveSticker({ bytes, name, maxLibrary: config.maxLibrary });
+      // 本地补丁：按这条消息的文字猜情绪标签写进文件名，AI 之后按心情/场景挑图时能命中。
+      const tags = config.autoTag === false
+        ? []
+        : inferStickerTags(safeText(message), { max: Number.isInteger(config.maxTags) ? config.maxTags : 2 });
+      const result = await saveSticker({ bytes, name, tags, maxLibrary: config.maxLibrary });
       if (result.saved) this.#logger.info?.(`[dsh-im:qq] sticker collected: ${result.path}`);
     }
   }
@@ -2270,23 +2285,43 @@ export class QqHarnessBridge {
         : textAnswer;
       let voiceFailure = null;
       let stickerFailure = null;
-      if (mediaIntent.voiceText) {
+      // 本地补丁：一次回复里可以有 1~3 条语音（被逼急时连发）。
+      const voiceTexts = Array.isArray(mediaIntent.voiceTexts) && mediaIntent.voiceTexts.length > 0
+        ? mediaIntent.voiceTexts
+        : (mediaIntent.voiceText ? [mediaIntent.voiceText] : []);
+      if (voiceTexts.length > 0) {
+        let voiceSettings;
         try {
-          const { silk, durationMs, provider } = await synthesizeSpeechSilk(mediaIntent.voiceText, {
-            signal: this.#signal,
-            settings: await readVoiceSettings({ botId: this.#botId }),
-          });
-          await sendQqVoice(this.#bot, target, {
-            bytes: silk,
-            fileName: 'voice.silk',
-            mediaType: 'audio/silk',
-          }, { signal: this.#signal, timeoutMs: this.#fileUploadTimeoutMs });
-          this.#status.messagesReplied += 1;
-          this.#status.lastReplyAt = new Date().toISOString();
-          this.#logger.info?.(`[dsh-im:qq] natural-language voice sent (${durationMs} ms, ${provider})`);
+          voiceSettings = await readVoiceSettings({ botId: this.#botId });
         } catch (error) {
-          this.#logger.warn?.('[dsh-im:qq] natural-language voice failed:', error?.message ?? error);
-          voiceFailure = voiceFailureMessage(error);
+          this.#logger.warn?.('[dsh-im:qq] unable to read voice settings; using defaults:', error?.message ?? error);
+        }
+        for (const [voiceIndex, voiceText] of voiceTexts.entries()) {
+          this.#signal?.throwIfAborted();
+          if (voiceIndex > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250 + Math.floor(Math.random() * 450)));
+            this.#signal?.throwIfAborted();
+          }
+          try {
+            const { silk, durationMs, provider } = await synthesizeSpeechSilk(voiceText, {
+              signal: this.#signal,
+              settings: voiceSettings,
+            });
+            await sendQqVoice(this.#bot, target, {
+              bytes: silk,
+              fileName: `voice-${voiceIndex + 1}.silk`,
+              mediaType: 'audio/silk',
+            }, { signal: this.#signal, timeoutMs: this.#fileUploadTimeoutMs });
+            this.#status.messagesReplied += 1;
+            this.#status.lastReplyAt = new Date().toISOString();
+            this.#logger.info?.(
+              `[dsh-im:qq] natural-language voice ${voiceIndex + 1}/${voiceTexts.length} sent (${durationMs} ms, ${provider})`,
+            );
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] natural-language voice failed:', error?.message ?? error);
+            voiceFailure = voiceFailureMessage(error);
+            break;
+          }
         }
       }
       if (mediaIntent.stickerQuery !== null) {
