@@ -793,3 +793,35 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **表情按场景/心情挑**：`<dsh_im_sticker>无语</dsh_im_sticker>` 先做同义词扩展（开心≈乐/哈哈/笑/赞；无语≈离谱/难绷/服/逆天…），再按文件名匹配。自动收藏的图会用消息文字推断情绪词写进文件名（`auto_<sha1>_无语-乐.gif`），所以「收藏 → 下次按心情发」能对上；推断不出来时标 `随机`。
 - 配置新增：`stickerCollect.autoTag`（默认 true）、`stickerCollect.maxTags`（默认 2）。
 - 回归：新增 `test-media-intent.mjs`（8 项，含单条/三条/超限/表情+语音混合/静默）；`test-sticker-collect.mjs` 增补标签推断、同义词、去重、命名检查。测试总数 **17 个 `test-*.mjs`**。
+
+### 18.7 表情识图打标签 / 拒收（2026-10-24 第三轮）
+
+- 机器人看到群里的图片/表情（多模态上下文里有图）时，可以顺手判一次：
+  - 合人设：输出 `<dsh_im_sticker_tag>情绪词1,情绪词2</dsh_im_sticker_tag>` → `tagSticker()` 给该会话**最近自动收藏**的那张换文件名补标签；
+  - 不合人设：输出 `<dsh_im_sticker_reject/>` → `removeSticker()` 删掉那张自动收藏，不进库。
+- 两个标签只做动作、不算说话（`silent=false` 但无文字），不配解释；没把握时不输出，图保持 `随机` 标签。
+- 实现：`sticker-library.mjs` 新增 `tagSticker/removeSticker`（只允许操作 `auto_` 开头且位于配置目录内的文件）；`qq-bridge.mjs` 新增 `#recentStickers`（每会话最近 5 张）与 `#applyStickerVerdict()`。
+- 回归：`test-media-intent.mjs` 增补 4 项（标签/拒收/动作+静默/标签与发图并存）；`test-sticker-collect.mjs` 增补 5 项（改名、去重、删除、重复删除）。
+
+## 19. 轻量 agent preset `qq-bot`（2026-10-24，给机器人省 90k+ tokens/轮）
+
+**问题**：机器人会话在 bot-workspace 里跑，但继承整个 desktop profile 的 MCP 工具（blender / blender_agent / comfy / unity / cua / ego 浏览器…）。实测 `toolsTokens = 109,722`，其中 91.6k 与 QQ 无关；每次请求都背（prompt cache 命中也要付缓存价）。
+
+**做法**：在 desktop profile 的 `cordis.patch.yml` 末尾追加一个 `@deepseek-ai/dsh-agent-preset` 行（id `qq-bot`），它只挂：
+- `tool-web`（search/fetch）、`tool-ask-user`（提问转发）
+- `qq-bot-restrict.mjs`（profile 根目录）：`ctx.tools.restrict({ allow: ['ask_user_question','web_search','web_fetch'] })`，把继承来的其余全局工具从 schema 里隐藏
+- compaction 组（compaction-basic / command-compact / tool-result-pruner）
+
+**落地文件**：
+- `%USERPROFILE%\.dsh\profiles\desktop\qq-bot-restrict.mjs`（新增，~25 行）
+- `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`（末尾追加 preset 行）
+- 备份：`cordis.patch.yml.bak-before-qq-bot-preset-20261024`
+- 一键回滚：`tools\im-patch\回滚-qq-bot-preset.bat`（还原 patch + 删插件，然后重启 DSH）
+
+**启用步骤**（DSH 重启后；preset 只在新建会话生效，旧会话不变）：
+1. 用主人 QQ 私聊机器人：`/presetlist` → 找到「QQ 聊天机器人（qq-bot）」的序号；
+2. `/preset <序号>`（或 `/preset qq-bot`）；
+3. 对每个想换的群/私聊发 `/new` 重建会话（**会清空该会话上下文**，介意就等它自然新建）；
+4. 之后新会话的 `contextBreakdown.toolsTokens` 应从 ~110k 降到 1k 以内（可用 `_analysis` 里的会话投影方法核对）。
+
+**风险与回滚**：`tools.restrict` 若在当前 DSH 版本报错，插件只打印日志、不阻塞启动（退化为不省 token）；若 preset 行导致 DSH 起不来，双击回滚 .bat 后重启即可。

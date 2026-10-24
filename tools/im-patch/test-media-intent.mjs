@@ -43,6 +43,18 @@ try {
 
   const silentWithVoice = extractMediaIntent('<dsh_im_silent/> <dsh_im_voice>我就说一句</dsh_im_voice>');
   check('silent tag with voice is not dropped', silentWithVoice.voiceTexts.length === 1 && silentWithVoice.silent === false, JSON.stringify(silentWithVoice));
+
+  const tagged = extractMediaIntent('<dsh_im_sticker_tag>无语, 离谱</dsh_im_sticker_tag>');
+  check('sticker tag action parsed', JSON.stringify(tagged.stickerTags) === JSON.stringify(['无语', '离谱']) && tagged.silent === false, JSON.stringify(tagged));
+
+  const rejected = extractMediaIntent('这张不行<dsh_im_sticker_reject/>');
+  check('sticker reject parsed', rejected.stickerReject === true && rejected.text === '这张不行', JSON.stringify(rejected));
+
+  const actionOnly = extractMediaIntent('<dsh_im_sticker_tag>开心</dsh_im_sticker_tag><dsh_im_silent/>');
+  check('sticker action with silent still acts', actionOnly.silent === false && actionOnly.stickerTags.length === 1, JSON.stringify(actionOnly));
+
+  const tagWithText = extractMediaIntent('还行吧<dsh_im_sticker>摆烂</dsh_im_sticker><dsh_im_sticker_tag>无语</dsh_im_sticker_tag>');
+  check('sticker query and tag action kept apart', tagWithText.stickerQuery === '摆烂' && tagWithText.stickerTags[0] === '无语' && tagWithText.text === '还行吧', JSON.stringify(tagWithText));
 } catch (error) {
   console.error(error);
   failures.push('import/run');

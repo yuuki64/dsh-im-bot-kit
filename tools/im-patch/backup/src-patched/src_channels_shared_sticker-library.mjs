@@ -6,9 +6,9 @@
 // sent as a normal image message; animated GIFs stay animated.
 
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 
 const IMAGE_EXTENSIONS = new Set(['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp']);
 const MAX_FILES = 6000;
@@ -357,6 +357,58 @@ export async function saveSticker({ bytes, name = '', tags = [], maxLibrary = 80
   cache = null; // force the next pick to rescan
   await enforceAutoCap(directory, maxLibrary);
   return { saved: true, path: target };
+}
+
+const AUTO_NAME_PATTERN = /^auto_([0-9a-f]{8,40})(?:_[^.]*)?(\.[a-z0-9]+)$/u;
+
+async function locateLibraryFile(path) {
+  const target = resolve(String(path ?? ''));
+  const config = await readStickerConfig();
+  for (const directory of config.dirs) {
+    const root = resolve(directory);
+    if (dirname(target) === root) return { directory: root, file: target };
+  }
+  return null;
+}
+
+/**
+ * 给已收藏的自动表情补/换情绪标签（AI 识图后调用），文件名换成
+ * `auto_<sha1>_<标签>.ext`，pickSticker 立刻按新标签可命中。
+ */
+export async function tagSticker({ path, tags = [], maxTags = 2 } = {}) {
+  const located = await locateLibraryFile(path);
+  if (!located) return { tagged: false, reason: 'outside-library' };
+  const match = AUTO_NAME_PATTERN.exec(basename(located.file));
+  if (!match) return { tagged: false, reason: 'not-auto' };
+  const cleanTags = sanitizeStickerTags(tags, maxTags);
+  const suffix = cleanTags.length > 0 ? `_${cleanTags.join('-')}` : '';
+  const next = join(located.directory, `${AUTO_PREFIX}${match[1]}${suffix}${match[2]}`);
+  if (next === located.file) return { tagged: false, reason: 'unchanged', path: located.file };
+  try {
+    await rename(located.file, next);
+  } catch (error) {
+    return {
+      tagged: false,
+      reason: error?.code === 'EEXIST' || error?.code === 'EPERM' ? 'conflict' : 'rename-failed',
+      path: located.file,
+    };
+  }
+  cache = null;
+  return { tagged: true, path: next };
+}
+
+/** 删除一条自动收藏（AI 认为不符合人设时调用）。只动 auto_ 开头的文件。 */
+export async function removeSticker({ path } = {}) {
+  const located = await locateLibraryFile(path);
+  if (!located) return { removed: false, reason: 'outside-library' };
+  if (!basename(located.file).startsWith(AUTO_PREFIX)) return { removed: false, reason: 'not-auto' };
+  try {
+    await unlink(located.file);
+  } catch (error) {
+    return { removed: false, reason: error?.code === 'ENOENT' ? 'missing' : 'unlink-failed' };
+  }
+  cache = null;
+  return { removed: true };
 }
 
 /** Auto-collected sticker count/bytes (status helpers). */
