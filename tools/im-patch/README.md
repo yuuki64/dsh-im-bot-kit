@@ -834,12 +834,15 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 
 ### 18.8 watch 模式（每句都先看一眼，自己决定回不回）+ 标签误当工具的修复（2026-10-24 第四轮）
 
-**watch 模式**（`behavior.json → watch`，默认开）：
-- 群里没人叫机器人时，插件也会把这条**文本**消息递给 AI 看一眼（最多 10 万 token 级的轻量 preset 下每轮约 10k 上下文，成本很低）。
-- prompt 末尾追加一段「【群消息观察】…不需要接话就只输出 `<dsh_im_silent/>`」；模型照常可以用表情/语音标签。
-- 限速：`minIntervalMs`（默认 20s）、`maxPerHour`（默认 12）、`textOnly`（默认 true，只看纯文本，跳过图片/文件/引用）、`groups`（空=全部群）、`direct`（默认 false，私聊不 watch）、`instruction`（可整段覆盖默认提示词）。
-- 开关：`behavior.json → watch.enabled: false` 立即关闭（热生效，不用重启）。
-- 实现：`qq-bridge.mjs` 新增 `#allowWatch()`；`#accept` 在 `!addressed` 时若允许就把消息按 watch 模式入队，`#process` 里跳过「必须被点名」闸门并追加指令。
+**watch 模式**（`behavior.json → watch`，**默认关**；2026-10-24 收紧过一次）：
+- 群里没人叫机器人时，插件把这条**文本**消息递给 AI 看一眼（轻量 preset 下每轮约 10k 上下文）。
+- prompt 末尾追加「【群消息观察】…判定要严格：只有明显在叫你/回复你/直接与你有关才接；别人之间的对话、片段/梗/表情包配文、带「你/你就是」但没指向你的、拿不准的，一律只输出 `<dsh_im_silent/>`」。
+- 拦在代码层的碎片过滤：`minChars`（默认 6，`你就是`/`？`/`草` 这类直接不 watch）、纯符号消息、图片/文件/引用（`textOnly`）。
+- 限速：`minIntervalMs`（默认 30000）、`maxPerHour`（默认 6）、`groups`（空=全部群）、`direct`（默认 false）、`botIds`（空=所有 bot；**同一个群两个 bot 都 watch 会一起接话**，想避免就只填一个 botId）。
+- 开关：`behavior.json → watch.enabled: true` 才启用（热生效，不用重启）。
+- 实现：`qq-bridge.mjs` 的 `#allowWatch()`；`#accept` 在 `!addressed` 时若允许就按 watch 模式入队，`#process` 跳过「必须被点名」闸门并追加指令。
+
+**2026-10-24 事故记录**：开启 watch 后，群友之间一句 3 字的「你就是」被两个 bot 都看了，模型脑补成在说自己，于是 yuri 和椎名同时接话（「我什么时候变 ukino 了」「我就是什么」）。原因=① 模型把别人的「你」当成自己 ② 同群两个 bot 同时 watch。修复=上面的碎片过滤 + 严格判定提示 + 默认关闭 + `botIds` 限制。
 
 **标签误当工具的修复**（群里出现「工具调用「dsh_im_silent」未成功」）：
 - 现象：模型偶尔把 `<dsh_im_silent/>` 当成工具名去调用；DSH 返回 unknown tool 错误，插件把错误当正文发进群。
