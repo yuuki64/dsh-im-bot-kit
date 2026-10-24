@@ -37,6 +37,8 @@ export const FILES = Object.freeze([
   ['src_channels_shared_behavior-config.mjs', 'channels/shared/behavior-config.mjs'],
   ['src_channels_shared_busy-message-dispatcher.mjs', 'channels/shared/busy-message-dispatcher.mjs'],
   ['src_channels_shared_sticker-library.mjs', 'channels/shared/sticker-library.mjs'],
+  ['src_channels_shared_cost-budget.mjs', 'channels/shared/cost-budget.mjs'],
+  ['src_channels_shared_decision-log.mjs', 'channels/shared/decision-log.mjs'],
   ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],
   ['src_channels_shared_harness-client.mjs', 'channels/shared/harness-client.mjs'],
   ['src_channels_shared_group-reasoning.mjs', 'channels/shared/group-reasoning.mjs'],

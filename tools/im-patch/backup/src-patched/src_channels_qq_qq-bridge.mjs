@@ -115,6 +115,8 @@ import {
   tagSticker,
 } from '../shared/sticker-library.mjs';
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
+import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
+import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
 import { splitChatSegments } from './chat-segments.mjs';
 import {
   REASONING_EFFORTS,
@@ -525,6 +527,24 @@ function isReplyTriggered(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
 
 // 本地补丁（2026-10-24）：群里在聊「提示词/人设」而不是在跟机器人说话时，不接话。
 const PROMPT_TALK_PATTERN = /(?:提示词|提示词里|系统提示|人设卡|人设设定|她的人设|你的人设|system\s*prompt|prompt\s*里)/iu;
+
+// 收尾/结束语：接话窗口里看到这些，回最后一句就准备退出窗口。
+const CLOSING_PATTERN = /^(?:那|好|行|我)?\s*(?:晚安|晚安啦|睡了|去睡了|先睡了|不聊了|先这样|下了|我下了|撤了|先撤了|拜拜|白白|88|回头聊|溜了|滚去睡)/u;
+const WHY_COMMAND_PATTERN = /^\/(?:why|为什么)(?:\s+(\d{1,2}))?$/iu;
+
+/** 是否收尾语（导出便于测试）。 */
+export function isClosingMessage(text) {
+  return CLOSING_PATTERN.test(String(text ?? '').trim());
+}
+
+/** 当前是否在免打扰时段（导出便于测试）；支持跨午夜。 */
+export function inQuietHours(now, hours) {
+  const start = Number(hours?.start);
+  const end = Number(hours?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return false;
+  const hour = new Date(now).getHours();
+  return start < end ? (hour >= start && hour < end) : (hour >= start || hour < end);
+}
 
 /** 归一化一行聊天文字，用于复读接龙比较（去 @、空白、标点、大小写）。 */
 export function normalizeRepeatText(text) {
@@ -986,6 +1006,10 @@ export class QqHarnessBridge {
   #repeatReplies = new Map();
   // 本地补丁：机器人自己在每个会话里最近发的文字（用于识别「有人引用/回复我」）。
   #botTexts = new Map();
+  // 本地补丁：接话窗口里「连续无关」计数（模型沉默几次后退出窗口）。
+  #engagementMisses = new Map();
+  // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
+  #engagedTurnIds = new Set();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1078,13 +1102,39 @@ export class QqHarnessBridge {
     return map;
   }
 
+  /** 接话窗口时长（显式点名 10 分钟 / watch 触发 5 分钟，配置可改）。 */
+  #engagementTtlMs(kind = 'explicit') {
+    const engagement = readBehaviorConfig().engagement;
+    const minutes = kind === 'watch'
+      ? Number(engagement?.watchMinutes)
+      : Number(engagement?.explicitMinutes);
+    const fallback = kind === 'watch' ? 5 : 10;
+    return Math.max(60_000, (Number.isFinite(minutes) && minutes > 0 ? minutes : fallback) * 60_000);
+  }
+
   /** Remember that a sender is talking to us; keeps at most 8 senders per chat. */
-  #markEngaged(key, senderId) {
+  #markEngaged(key, senderId, kind = 'explicit') {
     if (!senderId) return;
     const map = this.#engagementMap(key);
     map.delete(senderId);
-    map.set(senderId, Date.now() + ENGAGEMENT_TTL_MS);
+    map.set(senderId, Date.now() + this.#engagementTtlMs(kind));
+    this.#engagementMisses.delete(`${key}\u0000${senderId}`);
     while (map.size > 8) map.delete(map.keys().next().value);
+  }
+
+  /** 接话窗口里模型连续沉默达到上限 → 主动退出窗口（返回 true 表示已退出）。 */
+  #noteEngagementMiss(key, senderId) {
+    if (!senderId) return false;
+    const mapKey = `${key}\u0000${senderId}`;
+    const limit = Math.max(1, Number(readBehaviorConfig().engagement?.irrelevantMissLimit) || 2);
+    const misses = (this.#engagementMisses.get(mapKey) ?? 0) + 1;
+    if (misses >= limit) {
+      this.#engagementMisses.delete(mapKey);
+      this.#engageMapDelete(key, senderId);
+      return true;
+    }
+    this.#engagementMisses.set(mapKey, misses);
+    return false;
   }
 
   /** Warm the voice sidecar so the first voice reply is not a cold start. */
@@ -1126,12 +1176,10 @@ export class QqHarnessBridge {
   #shouldReply(message, key) {
     const text = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
     const mentionedByName = mentionsBotByName(message, this.#selfNames);
-    // 本地补丁：有人「引用/回复」机器人自己说过的话，算点名（否则会被不抢话规则误杀）。
-    const quotedMe = this.#quotedMyMessage(message, key);
+    // 本地补丁（2026-10-24）：引用不再直接算点名——引用后的内容要由模型判断是不是在跟它说。
     const explicit = isQqMessageAddressed(message)
       || isNameMentioned(message, this.#nameMentionPattern)
-      || mentionedByName
-      || quotedMe;
+      || mentionedByName;
     // 本地补丁：认不出的群 @（正文有 <@id> 但既非事件也不是自己）记一次诊断，
     // 方便下次从日志确认平台返回的 mentions / rawEventType 结构。
     if (!explicit && message?.kind === 'group' && /<@!?[^<>\s]+>/u.test(text)
@@ -1171,7 +1219,7 @@ export class QqHarnessBridge {
       return false;
     }
     if (explicit) {
-      this.#markEngaged(key, senderId);
+      if (message?.senderIsBot !== true) this.#markEngaged(key, senderId);
       return true;
     }
     if (!senderId) return false;
@@ -1180,9 +1228,22 @@ export class QqHarnessBridge {
     if (!until) return false;
     if (now > until) {
       map.delete(senderId);
+      this.#engagementMisses.delete(`${key}\u0000${senderId}`);
       return false;
     }
-    map.set(senderId, now + ENGAGEMENT_TTL_MS);
+    // 免打扰时段：接话窗口内也不延长（只回点名/@）。
+    const engagement = readBehaviorConfig().engagement;
+    if (inQuietHours(now, engagement?.quietHours)) {
+      map.delete(senderId);
+      return false;
+    }
+    map.set(senderId, now + this.#engagementTtlMs('explicit'));
+    this.#engagedTurnIds.add(message?.messageId);
+    // 收尾语：允许回最后一句，然后 60 秒后自然退出窗口。
+    if (isClosingMessage(text)) {
+      map.set(senderId, now + 60_000);
+      return true;
+    }
     return true;
   }
 
@@ -1316,6 +1377,9 @@ export class QqHarnessBridge {
    * 返回 null 表示模型选择沉默（<dsh_im_silent/>）或生成失败。
    */
   async generateProactiveBubble(key, { quietMinutes = 15 } = {}) {
+    // 预算用尽时不再主动冒泡（只保留点名/引用/复读回复）。
+    const budget = readBehaviorConfig().budget;
+    if (isBudgetExhausted(this.#botId, budget?.dailyLimitCny)) return null;
     const prompt = `【主动发言机会】这个会话已经安静了大约 ${quietMinutes} 分钟。你可以选择主动说一句话，也可以不说。要求：像平时一样短（1~2 句、≤40 字），结合你们之前的聊天自然开口；不要提“主动机会/系统提示/冒泡/我来看看”这类词，不要用模板句式；觉得没必要就只输出 <dsh_im_silent/>。`;
     try {
       const { answer } = await askInWorkspaceSession({
@@ -1335,6 +1399,7 @@ export class QqHarnessBridge {
         },
       });
       const intent = extractMediaIntent(answer);
+      chargeBudget(this.#botId, readBehaviorConfig().budget?.bubbleCny);
       return intent.silent ? null : (intent.text || null);
     } catch (error) {
       this.#logger.warn?.('[dsh-im:qq] proactive bubble generation failed:', error?.message ?? error);
@@ -1347,54 +1412,49 @@ export class QqHarnessBridge {
    * 由 AI 自己决定接不接（不需要就在回复里只输出 <dsh_im_silent/>）。
    * 限速与开关都在 behavior.json → watch；默认关闭。
    */
-  #allowWatch(message, key) {
-    const config = readBehaviorConfig().watch;
-    if (!config?.enabled) return false;
-    // 只让配置里列出的 bot 参与 watch（空数组 = 所有 bot；同群两个 bot 同时 watch 会一起接话）。
+  #watchDecision(message, key) {
+    const behavior = readBehaviorConfig();
+    const config = behavior.watch;
+    const deny = (reason) => ({ allow: false, reason });
+    if (!config?.enabled) return deny('watch-disabled');
     if (Array.isArray(config.botIds) && config.botIds.length > 0
-      && !config.botIds.includes(this.#botId)) return false;
+      && !config.botIds.includes(this.#botId)) return deny('bot-not-watching');
+    const budget = behavior.budget;
+    if (isBudgetExhausted(this.#botId, budget?.dailyLimitCny)) return deny('budget-exhausted');
+    if (inQuietHours(Date.now(), behavior.engagement?.quietHours)) return deny('quiet-hours');
     const text = safeText(message);
-    // 本地补丁（2026-10-24）：everyone=true 时，所有人的消息（含其他机器人）都进入“看一眼”，
-    // 由 AI 结合上下文判断是不是在跟它说话；否则只有主人消息放宽。
     const everyoneReview = config.everyone === true;
     const ownerMessage = isOwnerSender(message, this.#ownerUserOpenid);
     const fullReview = everyoneReview || ownerMessage;
-    const ownerImage = fullReview && hasQqImageAttachments(message);
-    // 本地补丁：引用/回复消息也交给 AI 判断（引用的是机器人自己→该回；引用别人→静默）。
-    // 不依赖内存里的 #botTexts，重启前的旧消息被引用也能识别。
+    const hasImage = hasQqImageAttachments(message);
     const quoteRef = Boolean(qqReplyReference(message));
-    if (text.startsWith('/')) return false;
-    if (!text && !ownerImage && !quoteRef) return false;
+    if (text.startsWith('/')) return deny('command');
+    if (!text && !(fullReview && hasImage) && !quoteRef) return deny('empty');
     const trimmed = text.trim();
-    // 太短 / 纯符号的碎片（「你就是」「？」「草」）不watch，避免替别人脑补接话。
     if (!fullReview && !quoteRef) {
       const minChars = Number(config.minChars);
-      if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
-      if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
+      if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return deny('too-short');
+      if (!/[\p{L}\p{N}]/u.test(trimmed)) return deny('non-text');
     }
-    // 不抢话：别人在 @ 别人（不是我们）时不 watch。
     const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
     if (mentions.length > 0
       && !mentions.some((mention) => mention?.is_you === true)
-      && !mentionsBotByName(message, this.#selfNames)) return false;
-    // 话题白名单：只对「和这个机器人相关」的关键词做 watch（behavior.json → watch.topics[botId]）。
+      && !mentionsBotByName(message, this.#selfNames)) return deny('mentions-someone-else');
     const topicMap = config.topics && typeof config.topics === 'object' ? config.topics : null;
     const topics = topicMap
       ? (Array.isArray(topicMap[this.#botId]) ? topicMap[this.#botId] : topicMap.all)
       : null;
     if (text && Array.isArray(topics) && topics.length > 0
-      && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return false;
+      && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return deny('topic-mismatch');
     if (!fullReview && !quoteRef && config.textOnly !== false
-      && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
-    if (message.kind === 'c2c' && config.direct !== true) return false;
+      && (hasImage || hasQqFileAttachments(message))) return deny('media-skipped');
+    if (message.kind === 'c2c' && config.direct !== true) return deny('direct-disabled');
     if (message.kind === 'group') {
       const groups = Array.isArray(config.groups) ? config.groups : [];
       const groupId = nonEmptyString(message.groupOpenid);
-      if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return false;
+      if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return deny('group-filtered');
     }
-    // 别人在讨论她的提示词/人设（不是在跟她说话）→ 不接。
-    if (text && config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return false;
-    // 活跃群模式：最近 activityWindowMinutes 分钟内至少 activityMinMessages 条才“看一眼”。
+    if (text && config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return deny('prompt-talk');
     const activityWindow = Number(config.activityWindowMinutes);
     const activityMin = Number(config.activityMinMessages);
     if (!fullReview && !quoteRef && Number.isFinite(activityWindow) && activityWindow > 0
@@ -1402,22 +1462,23 @@ export class QqHarnessBridge {
       const nowForActivity = Date.now();
       const recentCount = (this.#recentChat.get(key) ?? [])
         .filter((entry) => nowForActivity - entry.at <= activityWindow * 60_000).length;
-      if (recentCount < activityMin) return false;
+      if (recentCount < activityMin) return deny('inactive-group');
     }
     const now = Date.now();
-    const state = this.#watchHistory.get(key) ?? { lastAt: 0, hits: [] };
-    if (now - state.lastAt < (Number(config.minIntervalMs) || 0)) return false;
-    // 保留 24h 内的记录，分别按小时/按天限速。
+    const state = this.#watchHistory.get(key) ?? { lastAtBySender: {}, hits: [] };
+    if (!state.lastAtBySender || typeof state.lastAtBySender !== 'object') state.lastAtBySender = {};
+    const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
+    if (now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) return deny('sender-cooldown');
     state.hits = (Array.isArray(state.hits) ? state.hits : []).filter((at) => now - at < 24 * 60 * 60 * 1000);
     const hourHits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
     const hourLimit = Number(config.maxPerHour);
-    if (Number.isFinite(hourLimit) && hourLimit > 0 && hourHits.length >= hourLimit) return false;
+    if (Number.isFinite(hourLimit) && hourLimit > 0 && hourHits.length >= hourLimit) return deny('hour-cap');
     const dayLimit = Number(config.maxPerDay);
-    if (Number.isFinite(dayLimit) && dayLimit > 0 && state.hits.length >= dayLimit) return false;
-    state.lastAt = now;
+    if (Number.isFinite(dayLimit) && dayLimit > 0 && state.hits.length >= dayLimit) return deny('day-cap');
+    state.lastAtBySender[senderId] = now;
     state.hits.push(now);
     this.#watchHistory.set(key, state);
-    return true;
+    return { allow: true, reason: quoteRef ? 'quote-review' : 'watch' };
   }
 
   /** 本地补丁：记录每会话最近聊天（活跃度 + 复读检测）。 */
@@ -1460,6 +1521,8 @@ export class QqHarnessBridge {
   #shouldJoinRepeat(message, key) {
     const config = readBehaviorConfig().watch;
     if (!config?.enabled) return false;
+    // 免打扰时段只回点名，不主动接龙。
+    if (inQuietHours(Date.now(), readBehaviorConfig().engagement?.quietHours)) return false;
     if (message?.senderIsBot === true) return false;
     if (Array.isArray(config.botIds) && config.botIds.length > 0
       && !config.botIds.includes(this.#botId)) return false;
@@ -1485,6 +1548,90 @@ export class QqHarnessBridge {
     return true;
   }
 
+  /**
+   * 本地补丁（2026-10-24）：把「这条消息怎么处理」收敛成一个判定函数，
+   * 结果是 reply / watch / repeat / skip 之一，并附原因（用于决策日志）。
+   * @returns {{action: 'reply'|'watch'|'repeat'|'skip', reason: string}}
+   */
+  #decideInbound(message, key) {
+    const watchConfig = readBehaviorConfig().watch;
+    const explicitAddress = isQqMessageAddressed(message)
+      || isNameMentioned(message, this.#nameMentionPattern)
+      || mentionsBotByName(message, this.#selfNames);
+    if (message?.senderIsBot === true && !explicitAddress && !this.#isEngaged(message, key)) {
+      if (!(watchConfig?.enabled && watchConfig.everyone === true)) {
+        return { action: 'skip', reason: 'bot-not-addressed' };
+      }
+    }
+    const addressed = this.#shouldReply(message, key);
+    if (addressed) {
+      if (!this.#allowBotReply(message, key)) return { action: 'skip', reason: 'bot-throttled' };
+      return { action: 'reply', reason: 'addressed' };
+    }
+    if (this.#shouldJoinRepeat(message, key)) return { action: 'repeat', reason: 'repeat-chain' };
+    const watch = this.#watchDecision(message, key);
+    if (watch.allow) return { action: 'watch', reason: watch.reason };
+    return { action: 'skip', reason: watch.reason };
+  }
+
+  #logDecision(message, key, decision) {
+    const config = readBehaviorConfig().decisionLog;
+    if (!config?.enabled) return;
+    const prefix = Math.max(0, Number(config.textPrefix) || 24);
+    try {
+      appendDecision(this.#botId, {
+        conv: key,
+        sender: message?.senderName || message?.senderId,
+        owner: isOwnerSender(message, this.#ownerUserOpenid),
+        bot: message?.senderIsBot === true,
+        action: decision.action,
+        reason: decision.reason,
+        text: safeText(message).slice(0, prefix),
+        quoted: Boolean(qqReplyReference(message)),
+        image: hasQqImageAttachments(message) ? 1 : 0,
+      }, { retentionDays: Number(config.retentionDays) || 30 });
+    } catch {
+      // logging is best-effort
+    }
+  }
+
+  #logOutcome(message, key, outcome) {
+    const config = readBehaviorConfig().decisionLog;
+    if (!config?.enabled) return;
+    const prefix = Math.max(0, Number(config.textPrefix) || 24);
+    try {
+      appendDecision(this.#botId, {
+        conv: key,
+        sender: message?.senderName || message?.senderId,
+        owner: isOwnerSender(message, this.#ownerUserOpenid),
+        bot: message?.senderIsBot === true,
+        action: outcome.action,
+        reason: outcome.reason,
+        text: safeText(message).slice(0, prefix),
+        engaged: outcome.engagedTurn === true ? 1 : 0,
+      }, { retentionDays: Number(config.retentionDays) || 30 });
+    } catch {
+      // logging is best-effort
+    }
+  }
+
+  /** 主人 /why [N]：看最近 N 条判定记录 + 今日估算花费。 */
+  #handleWhyCommand(message, messageId, countArg) {
+    if (this.#signal?.aborted) return Promise.resolve();
+    const limit = Math.max(1, Math.min(10, Number(countArg) || 5));
+    const records = readRecentDecisions(this.#botId, { limit });
+    const lines = records.map((record) => {
+      const time = new Date(record.ts).toLocaleTimeString('zh-CN', { hour12: false });
+      const text = String(record.text ?? '').replace(/\s+/gu, ' ').slice(0, 16);
+      return `${time} ${record.action}/${record.reason} 「${text}」`;
+    });
+    const spent = botSpentCny(this.#botId);
+    const body = lines.length > 0 ? lines.join('\n') : '最近没有决策记录。';
+    return this.#bot.sendText(message.replyTarget, `最近决策：\n${body}\n今日估算 ¥${spent.toFixed(3)}`)
+      .then(() => this.#state.markSeen(messageId))
+      .catch(() => undefined);
+  }
+
   #accept(message) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.messageId);
@@ -1502,35 +1649,33 @@ export class QqHarnessBridge {
     void this.#collectInboundStickers(message).catch((error) => {
       this.#logger.warn?.('[dsh-im:qq] sticker collection failed:', error?.message ?? error);
     });
+    // 主人 /why [N]：先于判定处理，避免被当成普通聊天。
+    const whyMatch = WHY_COMMAND_PATTERN.exec(safeText(message));
+    if (whyMatch && isOwnerSender(message, this.#ownerUserOpenid)) {
+      this.#acceptedMessageIds.set(messageId, null);
+      return this.#handleWhyCommand(message, messageId, whyMatch[1]);
+    }
     // Other bots: only answer when they clearly address us and the throttle
     // allows it, so two bots cannot loop forever.
-    const explicitAddress = isQqMessageAddressed(message)
-      || isNameMentioned(message, this.#nameMentionPattern);
-    if (message.senderIsBot === true && !explicitAddress && !this.#isEngaged(message, key)) {
-      // 本地补丁：everyone 模式下，其他机器人的消息也要递进来判断。
-      const watchConfig = readBehaviorConfig().watch;
-      if (!(watchConfig?.enabled && watchConfig.everyone === true)) return Promise.resolve();
+    const decision = this.#decideInbound(message, key);
+    if (decision.action === 'skip') {
+      this.#engagedTurnIds.delete(messageId);
+      this.#logDecision(message, key, decision);
+      return Promise.resolve();
     }
-    const addressed = this.#shouldReply(message, key);
-    if (addressed && !this.#allowBotReply(message, key)) return Promise.resolve();
-    // 本地补丁：没人叫时也可以先看一眼（behavior.json → watch）。
-    if (!addressed) {
-      // 群友在复读接龙：这次跟着接一句（独立冷却）。
-      if (this.#shouldJoinRepeat(message, key)) {
-        this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
-          this.#contextEnhancement,
-          message.kind === 'c2c' ? 'direct' : 'group',
-        ));
-        return this.#enqueueMessage(message, messageId, key, { watchMode: true, repeatMode: true });
-      }
-      if (this.#allowWatch(message, key)) {
-        this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
-          this.#contextEnhancement,
-          message.kind === 'c2c' ? 'direct' : 'group',
-        ));
-        return this.#enqueueMessage(message, messageId, key, { watchMode: true });
-      }
+    if (decision.action === 'watch' || decision.action === 'repeat') {
+      this.#logDecision(message, key, decision);
+      this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
+        this.#contextEnhancement,
+        message.kind === 'c2c' ? 'direct' : 'group',
+      ));
+      return this.#enqueueMessage(message, messageId, key, {
+        watchMode: true,
+        repeatMode: decision.action === 'repeat',
+      });
     }
+    // decision.action === 'reply'
+    const addressed = true;
     const commandText = safeText(message);
     const menuTextOnly = !hasQqImageAttachments(message) && !hasQqFileAttachments(message)
       && !qqReplyReference(message);
@@ -2448,6 +2593,8 @@ export class QqHarnessBridge {
     const sender = nonEmptyString(message?.senderId);
     if (!messageId || !sender) return;
     if (!['c2c', 'group'].includes(message.kind)) return;
+    // 本地补丁：本轮是否由接话窗口续聊触发（消费一次）。
+    const engagedTurn = this.#engagedTurnIds.delete(messageId);
     if (!alreadyRecorded) {
       if (this.#state.hasSeen(messageId)) return;
       this.#status.messagesReceived += 1;
@@ -2594,7 +2741,8 @@ export class QqHarnessBridge {
       }
       // 本地补丁：引用/回复消息——让模型判断引用的是不是它自己。
       if (watchMode && qqReplyReference(message)) {
-        const instruction = '这条是引用/回复消息：判断引用的是不是你刚刚说过的话——如果引用的是你、或对方明显在问你，就正常回；如果引用的是别人的话、不是在跟你说话，就只输出 <dsh_im_silent/>。';
+        const quotedMe = this.#quotedMyMessage(message, key);
+        const instruction = `这条是引用/回复消息${quotedMe ? '，而且引用的内容是你自己说过的话' : ''}：判断引用之后这句话是不是在跟你说话。是就正常回；如果只是引用了别人的话、内容不是在跟你说，就只输出 <dsh_im_silent/>。`;
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
@@ -2613,9 +2761,15 @@ export class QqHarnessBridge {
           if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
         }
       }
-      // 本地补丁：真正被点名（名字/@/引用）时，不让模型用「不抢话」当理由沉默。
+      // 本地补丁：真正被点名（名字/@）时，不让模型用「不抢话」当理由沉默。
       if (!watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
-        const instruction = '【点名】这条消息明确叫到了你（名字/@/引用你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
+        const instruction = '【点名】这条消息明确叫到了你（名字/@你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+      }
+      // 本地补丁：接话窗口续聊——每条都做一次轻量判断，聊完/转向别人就别硬接。
+      if (engagedTurn && !watchMode && !repeatMode) {
+        const instruction = '这条来自刚才在跟你聊天的人（接话窗口）。先轻量判断：如果对方已经转向别人、在跟别人说、或明显收尾，就只输出 <dsh_im_silent/>；如果还在跟你聊，就正常接。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
@@ -2695,6 +2849,11 @@ export class QqHarnessBridge {
       }
       this.#signal?.throwIfAborted();
       const answerText = answerTextForDelivery(answer, artifacts);
+      // 本地补丁：每次模型调用记一笔估算成本（每日预算安全阀）。
+      chargeBudget(
+        this.#botId,
+        watchMode ? readBehaviorConfig().budget?.watchCny : readBehaviorConfig().budget?.replyCny,
+      );
       // Natural-language media: the model wraps what it wants sent in
       // <dsh_im_voice>…</dsh_im_voice> / <dsh_im_sticker>…</dsh_im_sticker>; the
       // plugin turns those into a real QQ voice message and a sticker image.
@@ -2703,6 +2862,12 @@ export class QqHarnessBridge {
       const hasVoiceIntent = Array.isArray(mediaIntent.voiceTexts) && mediaIntent.voiceTexts.length > 0;
       if (mediaIntent.silent && !hasVoiceIntent && !mediaIntent.stickerQuery) {
         this.#logger.info?.('[dsh-im:qq] model chose silence');
+        if (!watchMode && message.kind === 'group' && message.senderIsBot !== true) {
+          if (this.#noteEngagementMiss(key, sender)) {
+            this.#logger.info?.('[dsh-im:qq] engagement window closed after repeated silence');
+          }
+        }
+        this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent', engagedTurn });
         return;
       }
       // 模型把 <dsh_im_silent/> 当成工具调用（不存在）时：视为静默，不报错、不发消息。
@@ -2711,6 +2876,12 @@ export class QqHarnessBridge {
         && mediaIntent.stickerTags.length === 0
         && mediaIntent.stickerReject === false) {
         this.#logger.info?.('[dsh-im:qq] model chose silence (dsh_im_silent used as a tool call)');
+        if (!watchMode && message.kind === 'group' && message.senderIsBot !== true) {
+          if (this.#noteEngagementMiss(key, sender)) {
+            this.#logger.info?.('[dsh-im:qq] engagement window closed after repeated silence');
+          }
+        }
+        this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent-tool', engagedTurn });
         return;
       }
       // AI 识图后的表情判决：补标签 / 不合人设就删掉自动收藏。
@@ -2826,6 +2997,15 @@ export class QqHarnessBridge {
           });
           // 本地补丁：记住自己发过的话，之后有人引用它就能识别为「在回复我」。
           this.#rememberBotText(key, displayAnswer);
+          // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
+          if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
+            this.#markEngaged(key, sender, 'watch');
+          }
+          this.#logOutcome(message, key, {
+            action: 'sent',
+            reason: repeatMode ? 'repeat-replied' : watchMode ? 'watch-replied' : 'replied',
+            engagedTurn,
+          });
           textReceipt = createDeliveryReceipt({
             deliveryId: messageId,
             presentation: 'qq-text',

@@ -25,6 +25,27 @@ export function behaviorConfigPath() {
  */
 export const BEHAVIOR_DEFAULTS = Object.freeze({
   version: 1,
+  // 2026-10-24：接话窗口（被点名后继续聊 / watch 触发后的短窗口）与结束条件。
+  engagement: Object.freeze({
+    explicitMinutes: 10,
+    watchMinutes: 5,
+    irrelevantMissLimit: 2,
+    closingPatterns: Object.freeze([]),
+    quietHours: Object.freeze({ start: 1, end: 7 }),
+  }),
+  // 2026-10-24：每 bot 每日成本预算（粗算安全阀）；超限后只回点名/引用/复读。
+  budget: Object.freeze({
+    dailyLimitCny: 3,
+    replyCny: 0.006,
+    watchCny: 0.004,
+    bubbleCny: 0.006,
+  }),
+  // 2026-10-24：决策日志（/why）。
+  decisionLog: Object.freeze({
+    enabled: true,
+    retentionDays: 30,
+    textPrefix: 24,
+  }),
   replyChunking: Object.freeze({
     enabled: true,
     maxChars: 20,
