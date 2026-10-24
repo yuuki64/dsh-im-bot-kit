@@ -174,6 +174,56 @@ try {
   check('per-target slots are not re-sent', multiAgain.length === 0 && sentMulti.length === 3, JSON.stringify(multiAgain));
   multi.stop();
 
+  // AI 主动冒泡：安静 + 概率 1 时触发一次，并遵守下次检查间隔。
+  const bubbleNow = new Date();
+  bubbleNow.setHours(12, 0, 0, 0);
+  const bubbleNowMs = bubbleNow.getTime();
+  writeBehavior({
+    version: 1,
+    proactive: {
+      enabled: true,
+      dailyTimes: ['07:00'],
+      jitterMinutes: 0,
+      windowMinutes: 1,
+      quietMinutes: 0,
+      minIntervalMinutes: 0,
+      minIntervalMinutesPerTarget: 0,
+      maxPerDay: 9,
+      maxPerDayPerTarget: 3,
+      probability: 0,
+      aiBubbles: {
+        enabled: true,
+        includeDirect: false,
+        checkIntervalMinutes: 45,
+        jitterMinutes: 0,
+        quietMinutes: 5,
+        probability: 1,
+        minIntervalMinutes: 0,
+        maxPerDayPerTarget: 2,
+        maxPerDay: 2,
+        hours: { start: 0, end: 24 },
+      },
+      bots: {
+        'bot-bubble': { enabled: true, targets: ['group:B'], texts: { default: ['x'] } },
+      },
+    },
+  });
+  const bubbles = [];
+  const bubbleScheduler = new QqProactiveScheduler({
+    botId: 'bot-bubble',
+    now: () => bubbleNowMs,
+    send: async () => undefined,
+    allowed: () => true,
+    onBubble: async (key) => { bubbles.push(key); return { sent: true }; },
+  });
+  const bubbleFirst = await bubbleScheduler.tick();
+  check('AI bubble fires once when quiet', bubbles.length === 1 && bubbleFirst.join(',') === 'group:B|bubble',
+    JSON.stringify(bubbleFirst));
+  const bubbleSecond = await bubbleScheduler.tick();
+  check('AI bubble respects the next-check interval', bubbles.length === 1 && bubbleSecond.length === 0,
+    JSON.stringify(bubbleSecond));
+  bubbleScheduler.stop();
+
   // Disabled config never sends.
   writeBehavior({ version: 1, proactive: { enabled: false } });
   const disabled = await scheduler.tick();
