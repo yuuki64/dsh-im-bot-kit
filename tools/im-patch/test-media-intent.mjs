@@ -64,7 +64,8 @@ try {
     JSON.stringify(digest));
   check('digest includes bot messages both before and after current',
     digest.includes('你: 我先说的') && digest.includes('你: 我才不是猫娘')
-    && digest.indexOf('你: 我先说的') < digest.indexOf('▶') && digest.indexOf('▶') < digest.indexOf('你: 我才不是猫娘'),
+    && digest.indexOf('你: 我先说的') < digest.indexOf('▶ yuuki🍁: 才不是！')
+    && digest.indexOf('▶ yuuki🍁: 才不是！') < digest.indexOf('你: 我才不是猫娘'),
     JSON.stringify(digest));
   const digestOrder = digest.indexOf('小蓝莓: 猫娘yuuki') < digest.indexOf('▶ yuuki🍁: 才不是！')
     && digest.indexOf('▶ yuuki🍁: 才不是！') < digest.indexOf('你: 我才不是猫娘');
