@@ -154,6 +154,13 @@ try {
   ].join(''));
   check('memory notes capped at 2', memoryCap.memoryNotes.length === 2, JSON.stringify(memoryCap.memoryNotes));
 
+  // 口头禅语气标签：从正文剥离，供每日摘要写回习惯记忆。
+  const withHabitTone = extractMediaIntent('好<dsh_im_habit_tone>救命啊|夸张、撒娇</dsh_im_habit_tone>');
+  check('habit tone parsed and stripped',
+    withHabitTone.text === '好' && withHabitTone.habitTones.length === 1
+    && withHabitTone.habitTones[0] === '救命啊|夸张、撒娇',
+    JSON.stringify(withHabitTone));
+
   const one = extractMediaIntent('<dsh_im_voice>第一句</dsh_im_voice>');
   check('single voice extracted', one.voiceTexts.length === 1 && one.voiceTexts[0] === '第一句', JSON.stringify(one));
   check('single voice keeps compatibility field', one.voiceText === '第一句');

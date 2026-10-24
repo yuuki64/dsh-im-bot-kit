@@ -1,4 +1,4 @@
-﻿# 功能地图（Features Map）
+# 功能地图（Features Map）
 
 > 本文件是项目**功能与实现方式**的单一索引：有什么功能、在哪实现、怎么配置、怎么验证、怎么回滚。
 > 状态/待办放在 `交接.md`，补丁细节放在 `tools/im-patch/README.md`，关键决策放在 `docs/decisions-im-autonomy.md`。
@@ -71,7 +71,10 @@
 | 注入 | 按“当前发言人 + 关键词命中 + 最近”选 ≤700 字，带“不要复述/不要提记忆”约束 | `selectMemoryBlock()`、`#process` |
 | 隐私保护 | 地址/电话/账号/密码/提示词/系统设定硬拦截；90 天滚动；主人事实 ≤80、每群 ≤60 | `SENSITIVE_PATTERN`、`pruneMemory` |
 | 命令（主人） | `/memory` 查看、`/memory forget 关键词`、`/memory clear` | `#handleMemoryCommand` |
-| 测试 | `test-memory.mjs`（14 项）+ 标签解析 3 项 | `tools/im-patch/test-memory.mjs` |
+| 口头禅挖掘 | 每条消息统计短句/2~4 字片段；≥6 次（片段 ≥10）且跨 ≥2 天 → 晋升口头禅（零模型调用） | `recordHabitObservation()`、`#rememberChat` |
+| 语气标签 | 每日摘要判断口头禅语气，输出 `<dsh_im_habit_tone>短语|语气</dsh_im_habit_tone>` 写回 | `runMemoryDigest()`、`setHabitTone()` |
+| 偶尔模仿 | 按 `mimicProbability`（默认 0.3）对当前发言人给一段“可以偶尔学他语气”的提示 | `selectHabitHint()`、`#process` |
+| 测试 | `test-memory.mjs`（22 项）+ 标签解析 4 项 | `tools/im-patch/test-memory.mjs` |
 
 ## 6. 可观测与排障
 

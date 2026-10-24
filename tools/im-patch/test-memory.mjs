@@ -26,6 +26,7 @@ try {
   const {
     sanitizeFact, captureFacts, loadMemory, selectMemoryBlock, forgetMemory, pruneMemory,
     memoryStats, digestDoneToday, markDigestDone, memoryStatePath, clearMemory,
+    extractHabitCandidates, recordHabitObservation, listHabits, setHabitTone, selectHabitHint,
   } = memory;
 
   check('memory file path under DSH_HOME', memoryStatePath('bot-a').startsWith(tempHome), memoryStatePath('bot-a'));
@@ -88,6 +89,34 @@ try {
   check('digest not done yet', digestDoneToday('bot-a') === false);
   markDigestDone('bot-a');
   check('digest marked done', digestDoneToday('bot-a') === true);
+
+  // 习惯挖掘：同一发言人 6 次短句 + 跨 2 天 → 晋升口头禅；可补语气；提示受概率门控。
+  const habitBase = Date.now() - 5 * 24 * 60 * 60 * 1000;
+  const habitCandidates = extractHabitCandidates('救命啊');
+  check('habit candidate extracted', habitCandidates.some((item) => item.phrase === '救命啊'), JSON.stringify(habitCandidates));
+  for (let index = 0; index < 3; index += 1) {
+    recordHabitObservation('bot-a', { conversationKey: 'group:g1', sender: '小蓝莓', text: '救命啊', now: habitBase });
+  }
+  for (let index = 0; index < 3; index += 1) {
+    recordHabitObservation('bot-a', { conversationKey: 'group:g1', sender: '小蓝莓', text: '救命啊', now: habitBase + 24 * 60 * 60 * 1000 });
+  }
+  const habits = listHabits('bot-a', { conversationKey: 'group:g1', sender: '小蓝莓' });
+  check('habit promoted after 6 uses over 2 days', habits.length >= 1 && habits[0].text === '救命啊', JSON.stringify(habits));
+  const toneCount = setHabitTone('bot-a', { conversationKey: 'group:g1', sender: '小蓝莓', phrase: '救命', tone: '夸张、撒娇' });
+  const toned = listHabits('bot-a', { conversationKey: 'group:g1', sender: '小蓝莓' });
+  check('habit tone attached', toneCount >= 1 && toned[0].tone === '夸张、撒娇', JSON.stringify(toned[0]));
+  const hint = selectHabitHint('bot-a', {
+    conversationKey: 'group:g1', sender: '小蓝莓', probability: 1, random: () => 0,
+  });
+  check('habit hint mentions phrase and tone',
+    hint.block.includes('救命啊') && hint.block.includes('夸张') && hint.block.includes('偶尔'),
+    hint.block);
+  const gatedHint = selectHabitHint('bot-a', {
+    conversationKey: 'group:g1', sender: '小蓝莓', probability: 0, random: () => 1,
+  });
+  check('habit hint can be gated off', gatedHint.block === '');
+  check('habit hint not shown to another sender',
+    selectHabitHint('bot-a', { conversationKey: 'group:g1', sender: '别人', probability: 1, random: () => 0 }).block === '');
 
   clearMemory('bot-a');
   const cleared = loadMemory('bot-a');
