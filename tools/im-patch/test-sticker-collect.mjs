@@ -36,7 +36,7 @@ try {
   const sticker = await import(src('src/channels/shared/sticker-library.mjs'));
   const {
     isCollectableSticker, saveSticker, allowStickerCollection, resetStickerCollectLog,
-    autoStickerStats, MIN_COLLECT_BYTES,
+    autoStickerStats, MIN_COLLECT_BYTES, inferStickerTags, sanitizeStickerTags, expandStickerTokens,
   } = sticker;
 
   check('gif attachment is collectable', isCollectableSticker({ name: 'a.gif', mediaType: 'image/gif', size: 6000 }) === true);
@@ -47,11 +47,23 @@ try {
   check('huge image is not collectable', isCollectableSticker({ name: 'a.gif', mediaType: 'image/gif', size: 5 * 1024 * 1024 }) === false);
   check('type without extension still collectable', isCollectableSticker({ name: 'x', mediaType: 'image/png', size: 6000 }) === true);
 
+  check('infer tags from laughing text', JSON.stringify(inferStickerTags('笑死我了哈哈哈哈')) === JSON.stringify(['开心']), JSON.stringify(inferStickerTags('笑死我了哈哈哈哈')));
+  check('infer tags from annoyed text', JSON.stringify(inferStickerTags('服了，这也太离谱')) === JSON.stringify(['无语']), JSON.stringify(inferStickerTags('服了，这也太离谱')));
+  check('infer tags falls back to random', JSON.stringify(inferStickerTags('')) === JSON.stringify(['随机']));
+  check('infer tags capped', inferStickerTags('笑死 离谱 生气 哭', { max: 2 }).length === 2, JSON.stringify(inferStickerTags('笑死 离谱 生气 哭', { max: 2 })));
+  check('sanitize tags drops bad chars', JSON.stringify(sanitizeStickerTags([' 无/语 ', '可爱', '非常非常长的标签'])) === JSON.stringify(['无语', '可爱']),
+    JSON.stringify(sanitizeStickerTags([' 无/语 ', '可爱', '非常非常长的标签'])));
+  check('expand synonyms for mood query', expandStickerTokens(['开心']).includes('乐') && expandStickerTokens(['无语']).includes('离谱'),
+    JSON.stringify(expandStickerTokens(['开心'])));
+
   const libraryDir = join(tempHome, 'integrations', 'dsh-im', 'stickers');
-  const first = await saveSticker({ bytes: gifBytes(3000, 1), name: 'funny.gif', dir: libraryDir, maxLibrary: 10 });
+  const first = await saveSticker({ bytes: gifBytes(3000, 1), name: 'funny.gif', tags: ['开心'], dir: libraryDir, maxLibrary: 10 });
   check('first sticker saved', first.saved === true && Boolean(first.path), JSON.stringify(first));
+  check('auto file name carries tags', first.path.includes('auto_') && first.path.includes('_开心'), first.path);
   const duplicate = await saveSticker({ bytes: gifBytes(3000, 1), name: 'copy.gif', dir: libraryDir, maxLibrary: 10 });
   check('duplicate rejected by hash', duplicate.saved === false && duplicate.reason === 'duplicate', JSON.stringify(duplicate));
+  const duplicateOtherTag = await saveSticker({ bytes: gifBytes(3000, 1), name: 'copy.gif', tags: ['无语'], dir: libraryDir, maxLibrary: 10 });
+  check('duplicate found even when tags differ', duplicateOtherTag.saved === false && duplicateOtherTag.reason === 'duplicate', JSON.stringify(duplicateOtherTag));
   const second = await saveSticker({ bytes: gifBytes(4000, 2), name: 'second.gif', dir: libraryDir, maxLibrary: 10 });
   check('second sticker saved', second.saved === true);
   let stats = await autoStickerStats({ dir: libraryDir });

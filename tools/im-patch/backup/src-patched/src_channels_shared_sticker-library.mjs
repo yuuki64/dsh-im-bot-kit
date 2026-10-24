@@ -115,6 +115,77 @@ function score(sticker, tokens) {
   return total;
 }
 
+// 本地补丁（2026-10-24）：情绪标签与同义词。AI 发 `<dsh_im_sticker>开心</dsh_im_sticker>`
+// 时，除了字面命中，还会把这些同义词一起纳入匹配，提高「场景/心情对得上」的概率。
+const TAG_SYNONYMS = Object.freeze({
+  开心: ['开心', '乐', '哈哈', '笑', '高兴', '嗨', '赞'],
+  无语: ['无语', '离谱', '难绷', '服', '典', '逆天'],
+  生气: ['生气', '怒', '烦', '气', '凶', '急'],
+  难过: ['难过', '哭', '伤心', '累', 'emo', '破防'],
+  震惊: ['震惊', '卧槽', '惊', '假的', '啊'],
+  可爱: ['可爱', '萌', '贴贴', '抱', '软'],
+  摆烂: ['摆烂', '躺', '摸鱼', '摆', '废'],
+  赞: ['赞', '牛', '强', '厉害', '大佬', '佩服'],
+  谢谢: ['谢谢', '感谢', '谢', 'thx'],
+  困: ['困', '睡', '晚安', '眠'],
+});
+
+/** Expand query tokens with mood synonyms so tag choices match the library. */
+export function expandStickerTokens(tokens) {
+  const expanded = new Set();
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    const value = String(token ?? '').trim().toLowerCase();
+    if (!value) continue;
+    expanded.add(value);
+    for (const [canonical, synonyms] of Object.entries(TAG_SYNONYMS)) {
+      if (value === canonical || synonyms.some((word) => value.includes(word) || word.includes(value))) {
+        expanded.add(canonical);
+        for (const word of synonyms) expanded.add(word);
+      }
+    }
+  }
+  return [...expanded];
+}
+
+// 从一段文字里猜表情情绪标签（用于自动收藏时给图打标签）。
+const TAG_RULES = Object.freeze([
+  ['开心', /(哈哈|笑死|好笑|开心|高兴|乐|233|hhh|www)/iu],
+  ['无语', /(无语|离谱|难绷|服了|典|逆天)/iu],
+  ['生气', /(生气|气死|烦|滚|闭嘴|别说了|急了)/iu],
+  ['难过', /(难过|伤心|哭了|破防|emo|难受|累死)/iu],
+  ['震惊', /(卧槽|我去|震惊|真的假的|什么鬼)/iu],
+  ['可爱', /(可爱|萌|贴贴|抱抱|awsl)/iu],
+  ['摆烂', /(摆烂|躺平|摸鱼|不想动)/iu],
+  ['赞', /(牛|强|厉害|大佬|佩服|可以啊)/iu],
+  ['谢谢', /(谢谢|感谢|谢了|thx)/iu],
+  ['困', /(困死|睡了|晚安|睡觉)/iu],
+]);
+
+/** Guess mood tags from message text; returns ['随机'] when nothing matches. */
+export function inferStickerTags(text, { max = 2 } = {}) {
+  const value = String(text ?? '');
+  const tags = [];
+  if (value.trim()) {
+    for (const [tag, pattern] of TAG_RULES) {
+      if (tags.length >= max) break;
+      if (pattern.test(value)) tags.push(tag);
+    }
+  }
+  return tags.length > 0 ? tags : ['随机'];
+}
+
+/** Strip characters that cannot live in a file name and cap the tag count. */
+export function sanitizeStickerTags(tags, max = 2) {
+  const out = [];
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const clean = String(tag ?? '').trim().replace(/[\\/:*?"<>|\s]/gu, '');
+    if (!clean || clean.length > 6) continue;
+    if (!out.includes(clean)) out.push(clean);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /**
  * Pick one sticker, avoiding the most recent picks. `query` may be empty.
  * @returns {Promise<{path: string, name: string, mediaType: string, bytes: Buffer}|null>}
@@ -122,11 +193,11 @@ function score(sticker, tokens) {
 export async function pickSticker(query = '') {
   const stickers = await listStickers();
   if (stickers.length === 0) return null;
-  const tokens = String(query ?? '')
+  const tokens = expandStickerTokens(String(query ?? '')
     .toLowerCase()
     .split(/[\s,，。!！?？、/|]+/u)
     .map((token) => token.trim())
-    .filter((token) => token.length >= 1 && token.length <= 12);
+    .filter((token) => token.length >= 1 && token.length <= 12));
   const scored = tokens.length > 0
     ? stickers.map((sticker) => ({ sticker, score: score(sticker, tokens) }))
       .filter((entry) => entry.score > 0)
@@ -249,11 +320,24 @@ async function enforceAutoCap(directory, maxLibrary) {
   return removed;
 }
 
+async function findExistingAuto(directory, digest) {
+  try {
+    const entries = await readdir(directory);
+    const hit = entries.find((entry) => entry.startsWith(`${AUTO_PREFIX}${digest}`));
+    return hit ? join(directory, hit) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Save one sticker into the first configured library directory.
+ *
+ * `tags`（1~2 个情绪词）会写进文件名（`auto_<sha1>_无语-乐.gif`），
+ * AI 发 `<dsh_im_sticker>无语</dsh_im_sticker>` 时就能按标签挑到它。
  * @returns {Promise<{saved: boolean, reason?: string, path?: string}>}
  */
-export async function saveSticker({ bytes, name = '', maxLibrary = 800, dir = null } = {}) {
+export async function saveSticker({ bytes, name = '', tags = [], maxLibrary = 800, dir = null } = {}) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
   if (buffer.length < MIN_COLLECT_BYTES) return { saved: false, reason: 'too-small' };
   if (buffer.length > MAX_COLLECT_BYTES) return { saved: false, reason: 'too-large' };
@@ -264,13 +348,11 @@ export async function saveSticker({ bytes, name = '', maxLibrary = 800, dir = nu
   if (!directory) return { saved: false, reason: 'no-library' };
   await mkdir(directory, { recursive: true });
   const digest = createHash('sha1').update(buffer).digest('hex').slice(0, 16);
-  const target = join(directory, `${AUTO_PREFIX}${digest}${extension}`);
-  try {
-    await stat(target);
-    return { saved: false, reason: 'duplicate', path: target };
-  } catch {
-    // not collected yet
-  }
+  const cleanTags = sanitizeStickerTags(tags);
+  const suffix = cleanTags.length > 0 ? `_${cleanTags.join('-')}` : '';
+  const target = join(directory, `${AUTO_PREFIX}${digest}${suffix}${extension}`);
+  const existing = await findExistingAuto(directory, digest);
+  if (existing) return { saved: false, reason: 'duplicate', path: existing };
   await writeFile(target, buffer);
   cache = null; // force the next pick to rescan
   await enforceAutoCap(directory, maxLibrary);

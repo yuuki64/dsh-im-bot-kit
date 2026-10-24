@@ -781,7 +781,15 @@ node apply.mjs
 node test-chat-segments.mjs
 node test-sticker-collect.mjs
 node test-proactive-scheduler.mjs
+node test-media-intent.mjs
 # 其余回归
 Get-ChildItem -Filter "test-*.mjs" | ForEach-Object { node $_.FullName }
 node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出重开 DSH 后 exit 0
 ```
+
+### 18.6 语音连发与表情心情匹配（2026-10-24 第二轮）
+
+- **连发语音**：一次回复里可以放 **1~3 个独立的** `<dsh_im_voice>短句</dsh_im_voice>`（被逼急时用）。`extractMediaIntent()` 改为全量提取（超过 3 条只取前 3），插件按顺序合成并发送，条间随机 250~700ms；某条失败就停下并回一条失败提示。`voiceText` 字段保留第一条，兼容旧调用点；有语音/表情时不再判定为「静默」。
+- **表情按场景/心情挑**：`<dsh_im_sticker>无语</dsh_im_sticker>` 先做同义词扩展（开心≈乐/哈哈/笑/赞；无语≈离谱/难绷/服/逆天…），再按文件名匹配。自动收藏的图会用消息文字推断情绪词写进文件名（`auto_<sha1>_无语-乐.gif`），所以「收藏 → 下次按心情发」能对上；推断不出来时标 `随机`。
+- 配置新增：`stickerCollect.autoTag`（默认 true）、`stickerCollect.maxTags`（默认 2）。
+- 回归：新增 `test-media-intent.mjs`（8 项，含单条/三条/超限/表情+语音混合/静默）；`test-sticker-collect.mjs` 增补标签推断、同义词、去重、命名检查。测试总数 **17 个 `test-*.mjs`**。
