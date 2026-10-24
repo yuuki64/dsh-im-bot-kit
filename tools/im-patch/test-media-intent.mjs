@@ -18,7 +18,20 @@ function check(label, condition, detail = '') {
 }
 
 try {
-  const { extractMediaIntent, mentionsBotByName } = await import(src('src/channels/qq/qq-bridge.mjs'));
+  const { extractMediaIntent, mentionsBotByName, qqInboundMessage } = await import(src('src/channels/qq/qq-bridge.mjs'));
+
+  const voiceMsg = qqInboundMessage({
+    content: '',
+    attachments: [{ content_type: 'audio/amr', asr_refer_text: '今晚吃什么', url: 'https://example.com/v.amr' }],
+  });
+  check('voice message uses QQ asr text', voiceMsg.content.includes('今晚吃什么') && voiceMsg.files.length === 0,
+    JSON.stringify(voiceMsg));
+  const voiceNoAsr = qqInboundMessage({
+    content: '',
+    attachments: [{ content_type: 'audio/amr', url: 'https://example.com/v.amr' }],
+  });
+  check('voice without asr is noted, not filed', voiceNoAsr.content.includes('语音') && voiceNoAsr.files.length === 0,
+    JSON.stringify(voiceNoAsr));
 
   check('mention by nickname matches bot name',
     mentionsBotByName({ mentions: [{ nickname: 'yuri' }] }, ['yuri', '小鲸鱼']) === true);
