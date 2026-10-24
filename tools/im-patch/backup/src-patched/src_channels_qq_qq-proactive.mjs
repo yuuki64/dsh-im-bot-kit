@@ -273,11 +273,13 @@ export class QqProactiveScheduler {
       let targetLastSent = Number(record.lastSentByTarget?.[targetKey] ?? 0);
       for (const slotMinutes of slots) {
         if (Number.isFinite(globalCap) && globalCap > 0 && record.count >= globalCap) break;
+        // 私聊（c2c）不打散：固定到整点窗口，重启晚到也能落在 90 分钟窗口里。
+        const isDirectTarget = targetKey.startsWith('c2c:');
         const plannedMinutes = jitteredSlotMinutes({
           dailyMinutes: slotMinutes,
           dayKey,
           targetKey,
-          jitterMinutes: config.jitterMinutes,
+          jitterMinutes: isDirectTarget ? 0 : config.jitterMinutes,
         });
         const plannedMs = dayStart + plannedMinutes * 60_000;
         const slotLabel = formatSlot(slotMinutes);
