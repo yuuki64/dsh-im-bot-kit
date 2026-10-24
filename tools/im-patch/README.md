@@ -992,3 +992,28 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 **成本**：每条“看一眼”≈1 万 token（0.2~0.4 分），按上限每会话每天 30 次 ≈ 6 分；两个群约 12 分/天最坏值，实际远低。
 
 **回滚**：`behavior.json → watch.everyone = false` 即恢复成“只有主人放宽”，热生效不用重启；或整段 `watch.enabled=false`。
+
+### 18.20 接话窗口 / 判定集中化 / 决策日志 / 成本预算（2026-10-24 第十六轮，一次性打包）
+
+> 详细决策与理由见 `docs/decisions-im-autonomy.md`（镜像仓）。
+
+**接话窗口**
+- 被点名/@ → 10 分钟；watch 触发的接话 → 5 分钟（`behavior.json → engagement`）。
+- 窗口内每条消息追加“轻量判断”提示；模型连续沉默 `irrelevantMissLimit=2` 次 → 自动退出窗口。
+- 收尾语（晚安/睡了/不聊了/拜拜…）→ 回最后一句后窗口 60 秒结束。
+- 免打扰 `quietHours`（01:00–07:00）：只回点名/@；watch、复读、窗口续聊都不触发。
+- 其他机器人不进接话窗口。
+
+**引用判断**：引用不再直接算点名，引用后的正文交给模型判断（引用自己的话会加提示）；符合 Q1“引用要判断引用后发的消息是不是跟机器人说的”。
+
+**判定集中化**：`#accept` 入口统一调用 `#decideInbound()` → `reply / watch / repeat / skip`，skip 与 watch 都带原因；watch 限速改为**按发送者**（同会话每个人各自 1 分钟 1 次，小时/日上限仍按会话）。
+
+**决策日志 + /why**
+- 每条消息的判定与结果写 `~/.dsh/integrations/dsh-im/decision-log/YYYY-MM-DD.jsonl`（消息前 24 字 + 原因，**保留 30 天**）。
+- 主人发 `/why [N]` 查看最近 N 条判定和今日估算花费。
+
+**成本预算**
+- `behavior.json → budget`：每 bot 每天 **3 元**上限；回复/看一眼/冒泡分别估算 0.006/0.004/0.006 元。
+- 超限后：只回点名/@、引用、复读接龙；watch 与 AI 冒泡停掉；记录在 `cost-budget.json`。
+
+**测试**：新增 `test-decision-budget.mjs`（预算累计/上限、决策日志读写过滤、收尾语、免打扰跨午夜）——测试总数 **18 个全绿**。**本轮代码需重启一次 DSH。**
