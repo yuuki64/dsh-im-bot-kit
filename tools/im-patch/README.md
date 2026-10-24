@@ -871,3 +871,15 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **修复（代码，下次重启生效）**：`qq-bridge.mjs` 新增导出 `mentionsBotByName()`——`mentions[]` 里的 `nickname/username/name/card` 命中机器人自己的名字/别名（来自 `bot.json`）就算被叫到；`#shouldReply()` 的 `explicit` 与 `mentionsSelf` 都用它。认不出的 @ 会往 `~/.dsh/logs/dsh-im/` 写一条一次性诊断（rawEventType + mentions + 内容片段），方便继续校准。
 - **拆条阈值**：不是没拆，是原来的 `maxChars=60`；截图那条回复只有 52 字（两句话）所以没拆。现按主人要求改为 **20**：`behavior.json → replyChunking.maxChars = 20`（热生效，不用重启），`behavior-config.mjs` 默认值同步改 20。超过 20 字且 ≥2 句 → 拆成多条（实测 52 字回复拆成 2 条）。
 - 回归：`test-chat-segments.mjs` 增补 52 字两句话拆条用例；`test-media-intent.mjs` 增补 nickname 命中/不命中 3 项；17 个测试全绿。
+
+### 18.12 组合词唤醒 + watch 重新开启（带话题白名单，2026-10-24 第八轮）
+
+**组合词唤醒**：yuri 的 `bot.json` 别名改为 `yuri / 小鲸鱼 / 鲸鱼片 / 吃鲸鱼 / DeepSeek / 大肥鱼`——单独的「鲸鱼」不再直接唤醒（避免群里随便聊鲸鱼都被它插话），但「鲸鱼片」「吃鲸鱼」「小鲸鱼」会直接叫醒。
+
+**watch 重新开启（默认关 → 这次按主人要求开）**，新增限制把抢话风险压到很低：
+- **话题白名单** `watch.topics[<botId>]`：只有消息里出现和机器人相关的关键词才进入「看一眼」流程。当前配置：yuri = 鲸鱼 / 鱼片 / 吃鱼 / 大肥鱼；椎名 = 姐姐 / 希罗 / hiro。其他消息不 watch。
+- **频率**：`minIntervalMs=60000`（同会话 1 分钟一次）、`maxPerHour=4`、新增 `maxPerDay=30`。
+- **不抢话过滤**：别人 @ 别人（mentions 里没有自己）→ 不 watch；图片/文件/引用回复 → 不 watch；纯符号/少于 6 字 → 不 watch；`/` 开头命令 → 不 watch。
+- 判定提示仍是严格版：只有明显在叫你/回复你/直接与你有关才接，其余只输出 `<dsh_im_silent/>`。
+- 实现：`#allowWatch()` 增加 `topics` 与 mentions-other 过滤、日限速；`behavior-config.mjs` 默认值同步（`minIntervalMs 60000 / maxPerHour 4 / maxPerDay 30 / topics {}`）。
+- 生活示例：群友说「那么我要吃鲸鱼片」→ 直接唤醒 yuri（连发前会按人设接）；群友说「今天聊到鲸鱼」→ 落入 watch 看一眼，AI 觉得不相关就不回。
