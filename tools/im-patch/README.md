@@ -1053,3 +1053,14 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 
 **测试**：18 个测试全绿。**代码改动需重启一次 DSH。**
 
+### 18.23 长期记忆（2026-10-24 第二十轮，A+B）
+
+- **存储**：`~/.dsh/integrations/dsh-im/memory/<botId>.json`；主人事实跨群共享（私聊也注入），群事实按会话隔离；90 天滚动（主人事实 ≤80、每群 ≤60）。
+- **A 抓取**：模型回复末尾 `<dsh_im_memory>事实</dsh_im_memory>`（最多 2 条），`extractMediaIntent` 解析并剥离，`#process` 写入；只输出记忆标签时按静默处理。
+- **B 摘要**：每天 23:30 后每个活跃群跑一次 `runMemoryDigest()`（`lastDigestDay` 去重、超预算跳过），提炼并合并新事实。
+- **注入**：`selectMemoryBlock()` 按“当前发言人 + 关键词命中 + 最近”挑选，≤700 字，带“只是背景/不要复述/不要提记忆”约束。
+- **隐私**：地址/电话/账号/密码/提示词/系统设定硬拦截（`SENSITIVE_PATTERN`）。
+- **命令（主人）**：`/memory` 查看、`/memory forget 关键词`、`/memory clear`。
+- **测试**：新增 `test-memory.mjs`（14 项）+ media-intent 标签解析 3 项；测试总数 **19 个全绿**。
+- 本轮工作区同时有另一路并行改动（最近群聊摘要、连发合并、媒体“别当解说员”规则），已确认与记忆功能不冲突，一起构建通过。
+
