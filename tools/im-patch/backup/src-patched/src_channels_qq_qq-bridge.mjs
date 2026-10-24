@@ -536,6 +536,20 @@ export function normalizeRepeatText(text) {
 }
 
 /**
+ * 本地补丁：这条引用是不是在引用机器人自己说过的话（用来识别「有人回复机器人」）。
+ * @returns {boolean}
+ */
+export function matchesOwnText(quotedContent, ownTexts) {
+  const quoted = normalizeRepeatText(quotedContent);
+  if (!quoted) return false;
+  return (Array.isArray(ownTexts) ? ownTexts : []).some((own) => {
+    const text = normalizeRepeatText(own);
+    if (!text) return false;
+    return text === quoted || text.includes(quoted) || quoted.includes(text);
+  });
+}
+
+/**
  * 本地补丁（2026-10-24）：复读接龙检测。
  * @param {Array<{senderId?: string, senderIsBot?: boolean, text?: string, at?: number}>} history
  * @returns {boolean} 当前这条是否属于「多人在复读同一句」
@@ -970,6 +984,8 @@ export class QqHarnessBridge {
   #recentChat = new Map();
   // 本地补丁：复读接龙回复冷却（每个会话）。
   #repeatReplies = new Map();
+  // 本地补丁：机器人自己在每个会话里最近发的文字（用于识别「有人引用/回复我」）。
+  #botTexts = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1110,9 +1126,12 @@ export class QqHarnessBridge {
   #shouldReply(message, key) {
     const text = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
     const mentionedByName = mentionsBotByName(message, this.#selfNames);
+    // 本地补丁：有人「引用/回复」机器人自己说过的话，算点名（否则会被不抢话规则误杀）。
+    const quotedMe = this.#quotedMyMessage(message, key);
     const explicit = isQqMessageAddressed(message)
       || isNameMentioned(message, this.#nameMentionPattern)
-      || mentionedByName;
+      || mentionedByName
+      || quotedMe;
     // 本地补丁：认不出的群 @（正文有 <@id> 但既非事件也不是自己）记一次诊断，
     // 方便下次从日志确认平台返回的 mentions / rawEventType 结构。
     if (!explicit && message?.kind === 'group' && /<@!?[^<>\s]+>/u.test(text)
@@ -1336,12 +1355,17 @@ export class QqHarnessBridge {
     if (Array.isArray(config.botIds) && config.botIds.length > 0
       && !config.botIds.includes(this.#botId)) return false;
     const text = safeText(message);
-    if (!text || text.startsWith('/')) return false;
+    // 主人发的图片（比如「大肥鱼的照片」）即使没文字也让 AI 看一眼；普通图片/文件仍跳过。
+    const ownerImage = isOwnerSender(message, this.#ownerUserOpenid) && hasQqImageAttachments(message);
+    if (text.startsWith('/')) return false;
+    if (!text && !ownerImage) return false;
     const trimmed = text.trim();
     // 太短 / 纯符号的碎片（「你就是」「？」「草」）不watch，避免替别人脑补接话。
-    const minChars = Number(config.minChars);
-    if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
-    if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
+    if (!ownerImage) {
+      const minChars = Number(config.minChars);
+      if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
+      if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
+    }
     // 不抢话：别人在 @ 别人（不是我们）时不 watch。
     const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
     if (mentions.length > 0
@@ -1352,9 +1376,9 @@ export class QqHarnessBridge {
     const topics = topicMap
       ? (Array.isArray(topicMap[this.#botId]) ? topicMap[this.#botId] : topicMap.all)
       : null;
-    if (Array.isArray(topics) && topics.length > 0
+    if (text && Array.isArray(topics) && topics.length > 0
       && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return false;
-    if (config.textOnly !== false
+    if (!ownerImage && config.textOnly !== false
       && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
     if (message.kind === 'c2c' && config.direct !== true) return false;
     if (message.kind === 'group') {
@@ -1363,11 +1387,11 @@ export class QqHarnessBridge {
       if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return false;
     }
     // 别人在讨论她的提示词/人设（不是在跟她说话）→ 不接。
-    if (config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return false;
+    if (text && config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return false;
     // 活跃群模式：最近 activityWindowMinutes 分钟内至少 activityMinMessages 条才“看一眼”。
     const activityWindow = Number(config.activityWindowMinutes);
     const activityMin = Number(config.activityMinMessages);
-    if (Number.isFinite(activityWindow) && activityWindow > 0
+    if (!ownerImage && Number.isFinite(activityWindow) && activityWindow > 0
       && Number.isFinite(activityMin) && activityMin > 0) {
       const nowForActivity = Date.now();
       const recentCount = (this.#recentChat.get(key) ?? [])
@@ -1403,6 +1427,24 @@ export class QqHarnessBridge {
       at: now,
     });
     this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
+  }
+
+  /** 本地补丁：记录机器人自己发过的文字（用于判断有人引用/回复它）。 */
+  #rememberBotText(key, text) {
+    const value = String(text ?? '').trim();
+    if (!value) return;
+    const now = Date.now();
+    const list = this.#botTexts.get(key) ?? [];
+    list.push({ text: value, at: now });
+    this.#botTexts.set(key, list.filter((entry) => now - entry.at <= 60 * 60 * 1000).slice(-20));
+  }
+
+  /** 本地补丁：这条消息引用的内容是不是机器人自己说过的。 */
+  #quotedMyMessage(message, key) {
+    const ref = qqReplyReference(message);
+    if (!ref || typeof ref.content !== 'string') return false;
+    const own = (this.#botTexts.get(key) ?? []).map((entry) => entry.text);
+    return matchesOwnText(ref.content, own);
   }
 
   /**
@@ -2753,6 +2795,8 @@ export class QqHarnessBridge {
               }
               : {}),
           });
+          // 本地补丁：记住自己发过的话，之后有人引用它就能识别为「在回复我」。
+          this.#rememberBotText(key, displayAnswer);
           textReceipt = createDeliveryReceipt({
             deliveryId: messageId,
             presentation: 'qq-text',
