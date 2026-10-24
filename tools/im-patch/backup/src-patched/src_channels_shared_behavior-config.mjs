@@ -27,7 +27,7 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
   version: 1,
   replyChunking: Object.freeze({
     enabled: true,
-    maxChars: 60,
+    maxChars: 40,
     maxSegments: 3,
     gapMinMs: 400,
     gapMaxMs: 900,

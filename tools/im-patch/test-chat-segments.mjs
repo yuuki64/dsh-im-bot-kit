@@ -42,6 +42,13 @@ try {
   const newlineSegments = splitChatSegments(newlineReply, { maxChars: 20, maxSegments: 3 });
   check('newlines separate segments', Array.isArray(newlineSegments) && newlineSegments.length >= 2, JSON.stringify(newlineSegments));
 
+  // 用户实际遇到的那条「看起来很长但只有 52 字」的回复：maxChars=40 时应拆成两条。
+  const userCase = '就三点：越来越能自己干活，越来越便宜，越来越难信。 瓶颈早不是聪不聪明，是它瞎编的时候谁来兜。';
+  const userSegments = splitChatSegments(userCase, { maxChars: 40, maxSegments: 3 });
+  check('52-char two-sentence reply splits at 40', Array.isArray(userSegments) && userSegments.length === 2, JSON.stringify(userSegments));
+  check('user reply keeps all text', userSegments.join('').replace(/\s+/gu, '') === userCase.replace(/\s+/gu, ''),
+    JSON.stringify(userSegments));
+
   check('shouldSplitChatReply agrees with splitter', shouldSplitChatReply(two, { maxChars: 30 }) === Boolean(twoSegments));
   check('splitSentences keeps punctuation', splitSentences('a。b！c？')[0].includes('。'));
 
