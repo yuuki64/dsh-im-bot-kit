@@ -1,4 +1,4 @@
-# 功能地图（Features Map）
+﻿# 功能地图（Features Map）
 
 > 本文件是项目**功能与实现方式**的单一索引：有什么功能、在哪实现、怎么配置、怎么验证、怎么回滚。
 > 状态/待办放在 `交接.md`，补丁细节放在 `tools/im-patch/README.md`，关键决策放在 `docs/decisions-im-autonomy.md`。
@@ -61,6 +61,18 @@
 | 推理强度 | 群里默认 low，主人 `/effort` 调整 | `group-reasoning.mjs` |
 | 历史保留 | 群历史 14 天、决策日志 30 天、表情库上限 800 | `group-history-store.mjs`、`decision-log.mjs`、`sticker-library.mjs` |
 
+## 5.1 长期记忆（2026-10-24）
+
+| 功能 | 说明 | 实现位置 |
+|---|---|---|
+| 抓取（A） | 模型回复末尾 `<dsh_im_memory>事实</dsh_im_memory>`（最多 2 条，插件吞标签） | `extractMediaIntent`、`#process`、`captureFacts` |
+| 每日摘要（B） | 23:30 后每个活跃群一次模型调用，提炼新事实；`lastDigestDay` 去重 | `runMemoryDigest()`、runtime `#startMemoryDigestTimer` |
+| 存储 | `~/.dsh/integrations/dsh-im/memory/<botId>.json`；主人事实跨群共享、群事实按会话隔离 | `memory-store.mjs` |
+| 注入 | 按“当前发言人 + 关键词命中 + 最近”选 ≤700 字，带“不要复述/不要提记忆”约束 | `selectMemoryBlock()`、`#process` |
+| 隐私保护 | 地址/电话/账号/密码/提示词/系统设定硬拦截；90 天滚动；主人事实 ≤80、每群 ≤60 | `SENSITIVE_PATTERN`、`pruneMemory` |
+| 命令（主人） | `/memory` 查看、`/memory forget 关键词`、`/memory clear` | `#handleMemoryCommand` |
+| 测试 | `test-memory.mjs`（14 项）+ 标签解析 3 项 | `tools/im-patch/test-memory.mjs` |
+
 ## 6. 可观测与排障
 
 | 功能 | 说明 | 实现位置 |
@@ -69,7 +81,7 @@
 | `/why [N]` | 主人查最近 N 条判定 + 今日估算花费 | `#handleWhyCommand` |
 | `/status` `/new` `/compact` 等 | 内置命令 | 上游 dsh-im + 补丁 |
 | 构建校验 | `apply.mjs` / `verify-build.mjs`（源码/产物/进程三方一致） | `tools/im-patch/*.mjs` |
-| 测试 | 18 个 `test-*.mjs` 离线测试 | `tools/im-patch/test-*.mjs` |
+| 测试 | 19 个 `test-*.mjs` 离线测试 | `tools/im-patch/test-*.mjs` |
 
 ## 7. 权限与安全
 
@@ -97,6 +109,7 @@
 | `~/.dsh/integrations/dsh-im/proactive-state.json` | 主动消息状态 | 插件写 |
 | `~/.dsh/integrations/dsh-im/cost-budget.json` | 每日预算计数 | 插件写 |
 | `~/.dsh/integrations/dsh-im/decision-log/` | 决策日志（30 天） | 插件写 |
+| `~/.dsh/integrations/dsh-im/memory/<botId>.json` | 长期记忆（90 天；主人事实跨群） | 插件写 |
 
 ## 9. 已知限制
 
@@ -117,5 +130,7 @@
 | 模板主动消息 | `proactive.enabled=false` |
 | 预算限制 | `budget.dailyLimitCny=0`（0=不限） |
 | 决策日志 | `decisionLog.enabled=false` |
+| 长期记忆 | `memory.enabled=false`（热生效）；清数据用 `/memory clear` |
 | 工具裁剪 | 跑 `回滚-qq-bot-preset.bat` 并重启 |
 | 整个补丁集 | git tag `backup-before-engagement-20261024` / `manual-backup-20261024-2037.zip` |
+

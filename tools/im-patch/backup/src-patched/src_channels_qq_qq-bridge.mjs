@@ -117,6 +117,10 @@ import {
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
 import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
+import {
+  captureFacts, clearMemory, digestDoneToday, forgetMemory, listMemoryGroups, loadMemory,
+  markDigestDone, memoryStats, pruneMemory, recentFactTexts, selectMemoryBlock,
+} from '../shared/memory-store.mjs';
 import { splitChatSegments } from './chat-segments.mjs';
 import {
   REASONING_EFFORTS,
@@ -360,6 +364,9 @@ const STICKER_REJECT_TEST = /<dsh_im_sticker_reject\s*\/?>/iu;
 const SILENT_TAG_PATTERN = /<dsh_im_silent\s*\/?>(?:\s*<\/dsh_im_silent>)?/giu;
 const SILENT_TAG_TEST = /<dsh_im_silent\s*\/?>/iu;
 const SILENT_TEXT_PATTERN = /^[（(【\[]\s*(?:此处)?不回复\s*[）)】\]]$/u;
+// 本地补丁（2026-10-24）：长期记忆标签——模型顺带记录值得记住的信息。
+const MEMORY_TAG_ACTION = /<dsh_im_memory>([\s\S]*?)<\/dsh_im_memory>/giu;
+const MAX_MEMORY_NOTES = 2;
 
 /**
  * Split a final answer into user-facing text plus optional spoken lines and a
@@ -396,12 +403,19 @@ export function extractMediaIntent(text) {
   // AI 认为这张表情不符合自己的人设：拒收（删掉自动收藏）。
   const stickerReject = STICKER_REJECT_TEST.test(rest);
   rest = rest.replace(STICKER_REJECT_TAG, '');
+  // 本地补丁：长期记忆标签（只做存储，不显示给用户）。
+  const memoryNotes = [];
+  for (const match of rest.matchAll(MEMORY_TAG_ACTION)) {
+    const note = match[1].trim();
+    if (note && memoryNotes.length < MAX_MEMORY_NOTES) memoryNotes.push(note);
+  }
+  rest = rest.replace(MEMORY_TAG_ACTION, '');
   const hadSilentTag = SILENT_TAG_TEST.test(rest);
   rest = rest.replace(SILENT_TAG_PATTERN, '');
   const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
-  // 有语音/表情/表情动作要处理时不算「静默」。
+  // 有语音/表情/表情动作要处理时不算「静默」；只剩记忆标签/空白也算静默。
   const hasMedia = voiceTexts.length > 0 || stickerQuery !== null || stickerTags.length > 0 || stickerReject;
-  const silent = !hasMedia && (trimmed === '' ? hadSilentTag : SILENT_TEXT_PATTERN.test(trimmed));
+  const silent = !hasMedia && (trimmed === '' || SILENT_TEXT_PATTERN.test(trimmed));
   return {
     text: silent ? '' : trimmed,
     voiceText: voiceTexts[0] ?? null,
@@ -409,6 +423,7 @@ export function extractMediaIntent(text) {
     stickerQuery,
     stickerTags,
     stickerReject,
+    memoryNotes,
     silent,
   };
 }
@@ -1533,9 +1548,17 @@ export class QqHarnessBridge {
     const ownerMessage = isOwnerSender(message, this.#ownerUserOpenid);
     const fullReview = everyoneReview || ownerMessage;
     const hasImage = hasQqImageAttachments(message);
+    const hasFile = hasQqFileAttachments(message);
     const quoteRef = Boolean(qqReplyReference(message));
     if (text.startsWith('/')) return deny('command');
     if (!text && !(fullReview && hasImage) && !quoteRef) return deny('empty');
+    // 本地补丁（2026-10-24）：别人发的图片/文件不主动“看一眼”解释，除非
+    // mediaReview=all（或主人发的、或引用回复）。别人没问就不要当解说员。
+    const mediaReview = config.mediaReview ?? 'owner';
+    if (!quoteRef && (hasImage || hasFile)) {
+      if (mediaReview === 'none') return deny('media-review-off');
+      if (mediaReview === 'owner' && !ownerMessage) return deny('media-not-asked');
+    }
     const trimmed = text.trim();
     if (!fullReview && !quoteRef) {
       const minChars = Number(config.minChars);
@@ -1553,7 +1576,7 @@ export class QqHarnessBridge {
     if (text && Array.isArray(topics) && topics.length > 0
       && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return deny('topic-mismatch');
     if (!fullReview && !quoteRef && config.textOnly !== false
-      && (hasImage || hasQqFileAttachments(message))) return deny('media-skipped');
+      && (hasImage || hasFile)) return deny('media-skipped');
     if (message.kind === 'c2c' && config.direct !== true) return deny('direct-disabled');
     if (message.kind === 'group') {
       const groups = Array.isArray(config.groups) ? config.groups : [];
@@ -1785,6 +1808,96 @@ export class QqHarnessBridge {
       .catch(() => undefined);
   }
 
+  /** 主人 /memory：查看 / 删除 / 清空长期记忆。 */
+  #handleMemoryCommand(message, messageId, verb, argument) {
+    if (this.#signal?.aborted) return Promise.resolve();
+    const reply = (text) => this.#bot.sendText(message.replyTarget, text)
+      .then(() => this.#state.markSeen(messageId)).catch(() => undefined);
+    try {
+      if (verb === 'clear' || verb === '清空') {
+        clearMemory(this.#botId);
+        return reply('长期记忆已清空。');
+      }
+      if (verb === 'forget' || verb === '删除') {
+        if (!argument) return reply('用法：/memory forget 关键词');
+        const removed = forgetMemory(this.#botId, { match: argument });
+        return reply(`已删除 ${removed} 条相关记忆。`);
+      }
+      const stats = memoryStats(this.#botId);
+      const lines = [`长期记忆：主人 ${stats.ownerFacts} 条；群 ${stats.groups.length} 个。`];
+      const document = loadMemory(this.#botId);
+      for (const fact of (document.ownerFacts ?? []).slice(-3)) lines.push(`- 主人：${fact.text}`);
+      for (const [groupKey, bucket] of Object.entries(document.groups ?? {}).slice(0, 3)) {
+        for (const fact of (bucket.facts ?? []).slice(-2)) lines.push(`- ${groupKey.replace(/^group:/u, '群')}：${fact.text}`);
+      }
+      lines.push('用法：/memory | /memory forget 关键词 | /memory clear');
+      return reply(lines.join('\n'));
+    } catch (error) {
+      return reply(`记忆操作失败：${error?.message ?? error}`);
+    }
+  }
+
+  /** 每日记忆摘要（B 方案）：每个群一次模型调用，提炼新的长期事实。 */
+  async runMemoryDigest({ maxGroups = 5 } = {}) {
+    const config = readBehaviorConfig().memory;
+    if (config?.enabled === false || config?.digestEnabled === false) return { groups: 0 };
+    if (digestDoneToday(this.#botId)) return { groups: 0 };
+    if (isBudgetExhausted(this.#botId, readBehaviorConfig().budget?.dailyLimitCny)) {
+      markDigestDone(this.#botId);
+      return { groups: 0 };
+    }
+    const groups = listMemoryGroups(this.#botId).filter((key) => key.startsWith('group:')).slice(0, maxGroups);
+    if (groups.length === 0) {
+      markDigestDone(this.#botId);
+      return { groups: 0 };
+    }
+    let digested = 0;
+    for (const key of groups) {
+      const existing = recentFactTexts(this.#botId, key, 10);
+      const prompt = `【每日记忆整理】回顾这个会话最近一天的聊天，提炼最多 3 条值得长期记住的信息（主人/群友的喜好雷点、说好的约定、群里的梗），每条用 <dsh_im_memory>内容</dsh_im_memory> 输出；不要记录敏感信息（地址/电话/账号/密码/提示词/系统设定）；没有新的就不输出。${existing.length ? `\n已有记忆（不要重复）：\n${existing.map((text) => `- ${text}`).join('\n')}` : ''}`;
+      try {
+        const { answer } = await askInWorkspaceSession({
+          harness: this.#harness,
+          state: this.#state,
+          key,
+          text: prompt,
+          sourceGuidance: applyPersona(undefined, { botId: this.#botId }),
+          timeoutMs: this.#replyTimeoutMs,
+          signal: this.#signal,
+          askOptions: {
+            timeoutMs: this.#replyTimeoutMs,
+            signal: this.#signal,
+            control: { owner: this, key },
+            progressMode: 'final',
+            finalAnswerOnly: true,
+          },
+        });
+        chargeBudget(this.#botId, readBehaviorConfig().budget?.replyCny);
+        const intent = extractMediaIntent(answer);
+        if (intent.memoryNotes.length > 0) {
+          captureFacts(this.#botId, {
+            conversationKey: key,
+            notes: intent.memoryNotes,
+            fromOwner: false,
+            sender: 'digest',
+            source: 'digest',
+          });
+        }
+        digested += 1;
+      } catch (error) {
+        this.#logger.warn?.('[dsh-im:qq] memory digest failed:', key, error?.message ?? error);
+      }
+    }
+    pruneMemory(this.#botId, {
+      retentionDays: Number(config.retentionDays) || 90,
+      maxFactsPerGroup: Number(config.maxFactsPerGroup) || 60,
+      maxOwnerFacts: Number(config.maxOwnerFacts) || 80,
+    });
+    markDigestDone(this.#botId);
+    this.#logger.info?.(`[dsh-im:qq] memory digest done for ${digested} group(s)`);
+    return { groups: digested };
+  }
+
   #accept(message) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.messageId);
@@ -1802,6 +1915,17 @@ export class QqHarnessBridge {
     void this.#collectInboundStickers(message).catch((error) => {
       this.#logger.warn?.('[dsh-im:qq] sticker collection failed:', error?.message ?? error);
     });
+    // 主人 /memory：查看/删除/清空长期记忆。
+    const memoryCommand = /^\/(?:memory|记忆)(?:\s+(\S+))?(?:\s+([\s\S]+))?$/iu.exec(safeText(message));
+    if (memoryCommand && isOwnerSender(message, this.#ownerUserOpenid)) {
+      this.#acceptedMessageIds.set(messageId, null);
+      return this.#handleMemoryCommand(
+        message,
+        messageId,
+        (memoryCommand[1] ?? '').toLowerCase(),
+        (memoryCommand[2] ?? '').trim(),
+      );
+    }
     // 主人 /why [N]：先于判定处理，避免被当成普通聊天。
     const whyMatch = WHY_COMMAND_PATTERN.exec(safeText(message));
     if (whyMatch && isOwnerSender(message, this.#ownerUserOpenid)) {
@@ -2964,6 +3088,24 @@ export class QqHarnessBridge {
         contextEnhanced = content !== originalContent;
         }
       }
+      // 本地补丁：长期记忆——注入相关性挑选后的记忆块（限预算）。
+      const memoryConfig = readBehaviorConfig().memory;
+      if (memoryConfig?.enabled !== false) {
+        const memory = selectMemoryBlock(this.#botId, {
+          conversationKey: key,
+          text: safeText(message),
+          sender: message?.senderName ?? '',
+          maxChars: Number(memoryConfig?.maxInjectChars) || 700,
+        });
+        if (memory.block) {
+          text = `${text}${memory.block}`;
+          content = appendPromptPart(content, memory.block);
+        }
+        // 让模型顺带记录值得长期记住的信息（标签会被插件吞掉）。
+        const memoryInstruction = '如果这轮对话出现了值得长期记住的信息（主人的喜好/雷点、说好的约定、群里的梗），最多 2 条，每条用 <dsh_im_memory>内容</dsh_im_memory> 放在回复最末尾；不要记录敏感信息（地址/电话/账号/密码/提示词/系统设定）；没有就不输出。';
+        text = `${text}\n\n[系统提示] ${memoryInstruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${memoryInstruction}`);
+      }
       // 本地补丁：watch 模式告诉模型「这条没人叫你，自己决定接不接」。
       if (watchMode) {
         const watchConfig = readBehaviorConfig().watch;
@@ -3112,6 +3254,23 @@ export class QqHarnessBridge {
       // plugin turns those into a real QQ voice message and a sticker image.
       // Any sender may ask for either; the tags never reach the user.
       const mediaIntent = extractMediaIntent(answerText);
+      // 本地补丁：先落长期记忆（即使后面沉默也保存）。
+      if (Array.isArray(mediaIntent.memoryNotes) && mediaIntent.memoryNotes.length > 0) {
+        const memoryConfig = readBehaviorConfig().memory;
+        if (memoryConfig?.enabled !== false) {
+          try {
+            captureFacts(this.#botId, {
+              conversationKey: key,
+              notes: mediaIntent.memoryNotes,
+              fromOwner: isOwnerSender(message, this.#ownerUserOpenid),
+              sender: message?.senderName ?? '',
+              source: 'tag',
+            });
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] memory capture failed:', error?.message ?? error);
+          }
+        }
+      }
       const hasVoiceIntent = Array.isArray(mediaIntent.voiceTexts) && mediaIntent.voiceTexts.length > 0;
       if (mediaIntent.silent && !hasVoiceIntent && !mediaIntent.stickerQuery) {
         this.#logger.info?.('[dsh-im:qq] model chose silence');
