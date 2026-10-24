@@ -57,6 +57,15 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     maxPerHour: 4,
     maxPerDay: 30,
     topics: Object.freeze({}),
+    // 2026-10-24 “活跃群模式”：最近 N 分钟至少 M 条消息才 watch（配合清空 topics 使用）。
+    activityWindowMinutes: 5,
+    activityMinMessages: 3,
+    // 复读接龙：同一段文字被 ≥N 个不同的人复读时，跟着接一句。
+    repeatChainWindowMinutes: 5,
+    repeatChainMinSenders: 2,
+    repeatReplyCooldownMinutes: 10,
+    // 别人在聊她的提示词/人设（不是跟她说话）时不接。
+    skipPromptTalk: true,
     instruction: '',
   }),
   proactive: Object.freeze({
