@@ -849,3 +849,9 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - 修复：`onUpdate` 里识别 `dsh_im_*` 虚拟标签名（silent/sticker/voice/sticker_tag/sticker_reject）→ 不报错、只记日志；`dsh_im_silent` 视为静默（不发消息）。同时在全局 `AGENTS.md` 增加「这些标签是正文，不是工具」的硬提示。
 
 **回归**：17 个 `test-*.mjs` 仍全绿；本轮产物 9,126,xxx B（见 build-manifest）。**代码改动需再重启 DSH 一次**；`behavior.json` 的开关/参数热生效。
+
+### 18.9 不抢话（2026-10-24 第五轮）
+
+- **提示词（热生效）**：全局 `AGENTS.md` 新增「不抢话（硬规则）」——宁可漏接不插别人的话；别人互聊/引用回复别人/句子里有「你」但没指向你/拿不准，一律不接或只输出 `<dsh_im_silent/>`；接话窗口里对方转向别人时立刻停。两个 bot 人设卡同步加了一条。
+- **代码（下次重启生效）**：`qq-bridge.mjs` 的 `#shouldReply()` 增加一条——**非主人**发来的消息如果带「引用/回复」且没有明确叫到机器人，就不再走接话窗口（直接不接），避免插进别人引用对话。主人不受影响。
+- 与 watch 的关系：watch 已默认关闭；即使重新打开，`watch.minChars=6` + 严格判定提示 + 这条引用过滤都会同时生效。

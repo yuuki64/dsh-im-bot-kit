@@ -1056,6 +1056,11 @@ export class QqHarnessBridge {
       this.#engageMapDelete(key, senderId);
       return false;
     }
+    // 不抢话：别人之间在「引用/回复」某条消息时，没有明确叫我们就不插嘴（主人除外）。
+    if (!explicit && !isOwnerSender(message, this.#ownerUserOpenid) && qqReplyReference(message)) {
+      this.#engageMapDelete(key, senderId);
+      return false;
+    }
     // Retraction wins: "I was not talking to you" clears the follow-up window.
     if (DISMISS_PATTERN.test(text)) {
       this.#engageMapDelete(key, senderId);
