@@ -39,6 +39,8 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     minBytes: 2048,
     maxBytes: 3 * 1024 * 1024,
     groups: Object.freeze([]),
+    autoTag: true,
+    maxTags: 2,
     perMinute: 1,
     perHour: 10,
     perDay: 40,
