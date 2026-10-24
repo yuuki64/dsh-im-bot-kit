@@ -105,6 +105,8 @@ const markers = [
   'switch page ready',
   '/api/state',
   'registeredWorkspaceId',
+  'sticker collected',
+  'proactive-state.json',
 ];
 const absent = markers.filter((marker) => !lib.includes(marker));
 if (absent.length) fail(`打包结果缺少标记：${absent.join(', ')}`);

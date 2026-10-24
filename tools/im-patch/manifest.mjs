@@ -21,6 +21,9 @@ export const UPSTREAM = Object.freeze({
 export const FILES = Object.freeze([
   ['src_channels_qq_qq-bridge.mjs', 'channels/qq/qq-bridge.mjs'],
   ['src_channels_qq_qq-runtime.mjs', 'channels/qq/qq-runtime.mjs'],
+  ['src_channels_qq_qq-proactive.mjs', 'channels/qq/qq-proactive.mjs'],
+  ['src_channels_qq_chat-segments.mjs', 'channels/qq/chat-segments.mjs'],
+  ['src_channels_qq_markdown-reply.mjs', 'channels/qq/markdown-reply.mjs'],
   ['src_channels_qq_state-store.mjs', 'channels/qq/state-store.mjs'],
   ['src_channels_shared_workspace-session.mjs', 'channels/shared/workspace-session.mjs'],
   ['src_channels_shared_group-history-store.mjs', 'channels/shared/group-history-store.mjs'],
@@ -31,6 +34,7 @@ export const FILES = Object.freeze([
   ['src_channels_shared_gpu-tts.mjs', 'channels/shared/gpu-tts.mjs'],
   ['src_channels_shared_gsv-tts.mjs', 'channels/shared/gsv-tts.mjs'],
   ['src_channels_shared_persona.mjs', 'channels/shared/persona.mjs'],
+  ['src_channels_shared_behavior-config.mjs', 'channels/shared/behavior-config.mjs'],
   ['src_channels_shared_busy-message-dispatcher.mjs', 'channels/shared/busy-message-dispatcher.mjs'],
   ['src_channels_shared_sticker-library.mjs', 'channels/shared/sticker-library.mjs'],
   ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],

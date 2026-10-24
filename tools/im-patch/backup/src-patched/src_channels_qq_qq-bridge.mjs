@@ -105,7 +105,14 @@ import { KOKORO_VOICES } from '../shared/kokoro-tts.mjs';
 import { applyPersona, listPersonas, readBotProfile, usePersona } from '../shared/persona.mjs';
 import { ensureGpuTts, gpuTtsAvailable, gpuTtsHealth, stopGpuTts } from '../shared/gpu-tts.mjs';
 import { ensureGsv, gsvHealth, isGsvAvailable, stopGsv } from '../shared/gsv-tts.mjs';
-import { pickSticker } from '../shared/sticker-library.mjs';
+import {
+  allowStickerCollection,
+  isCollectableSticker,
+  pickSticker,
+  saveSticker,
+} from '../shared/sticker-library.mjs';
+import { readBehaviorConfig } from '../shared/behavior-config.mjs';
+import { splitChatSegments } from './chat-segments.mjs';
 import {
   REASONING_EFFORTS,
   readGroupReasoningCeiling,
@@ -1066,6 +1073,59 @@ export class QqHarnessBridge {
     return allowed;
   }
 
+  /**
+   * Local patch (2026-10-24): copy small GIF/WebP/PNG images from incoming
+   * messages into the sticker library (behavior.json → stickerCollect).
+   * Runs beside the reply path and never blocks it.
+   */
+  async #collectInboundStickers(message) {
+    const config = (await readBehaviorConfig()).stickerCollect;
+    if (!config?.enabled) return;
+    if (config.scope === 'group' && message.kind !== 'group') return;
+    const conversationId = message.kind === 'group'
+      ? nonEmptyString(message.groupOpenid)
+      : nonEmptyString(message.senderId);
+    if (!conversationId) return;
+    if (Array.isArray(config.groups) && config.groups.length > 0
+      && !config.groups.includes(conversationId)) return;
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    if (attachments.length === 0) return;
+    const extensions = Array.isArray(config.extensions) && config.extensions.length > 0
+      ? new Set(config.extensions.map((extension) => String(extension).toLowerCase()))
+      : undefined;
+    for (const attachment of attachments) {
+      if (!isQqImageAttachment(attachment)) continue;
+      const name = nonEmptyString(attachment?.filename) ?? '';
+      const mediaType = attachmentMediaType(attachment);
+      const declaredSize = Number(attachment?.size);
+      if (!isCollectableSticker({
+        name,
+        mediaType,
+        size: Number.isFinite(declaredSize) ? declaredSize : null,
+        ...(extensions ? { extensions } : {}),
+      })) continue;
+      const url = nonEmptyString(attachment?.url);
+      if (!url) continue;
+      if (!allowStickerCollection({
+        perMinute: config.perMinute,
+        perHour: config.perHour,
+        perDay: config.perDay,
+      })) return;
+      const bytes = await fetchImageBuffer(url, {
+        fetchImpl: fetch,
+        signal: AbortSignal.timeout(8_000),
+        maxBytes: config.maxBytes,
+        allowedHosts: QQ_IMAGE_HOSTS,
+      }).catch((error) => {
+        this.#logger.warn?.('[dsh-im:qq] sticker download failed:', error?.message ?? error);
+        return null;
+      });
+      if (!bytes) continue;
+      const result = await saveSticker({ bytes, name, maxLibrary: config.maxLibrary });
+      if (result.saved) this.#logger.info?.(`[dsh-im:qq] sticker collected: ${result.path}`);
+    }
+  }
+
   #accept(message) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.messageId);
@@ -1076,6 +1136,11 @@ export class QqHarnessBridge {
       || this.#acceptedMessageIds.has(messageId)) return Promise.resolve();
     message = normalizeQqMentions(message, new Set([this.#bot.appId]));
     const key = conversationKey(message);
+    // 本地补丁：群友发的表情（gif/webp/png 小图）顺手收进表情库，下次能自己发。
+    // 不阻塞回复链路，失败只记日志。
+    void this.#collectInboundStickers(message).catch((error) => {
+      this.#logger.warn?.('[dsh-im:qq] sticker collection failed:', error?.message ?? error);
+    });
     // Other bots: only answer when they clearly address us and the throttle
     // allows it, so two bots cannot loop forever.
     const explicitAddress = isQqMessageAddressed(message)
@@ -2265,8 +2330,24 @@ export class QqHarnessBridge {
           }
         }
         if (!streamFinished && displayAnswer) {
+          // Local patch (2026-10-24): chat replies are delivered one short
+          // message at a time instead of one long bubble. Long paragraphs,
+          // code blocks, tables and URLs still take the normal path.
+          const chunking = readBehaviorConfig().replyChunking;
+          const chatSegments = chunking?.enabled
+            ? splitChatSegments(displayAnswer, {
+              maxChars: chunking.maxChars,
+              maxSegments: chunking.maxSegments,
+            })
+            : null;
           const deliveries = await sendMarkdownReply(this.#bot, target, displayAnswer, {
             logger: this.#logger,
+            ...(chatSegments
+              ? {
+                segments: chatSegments,
+                segmentGap: { minMs: chunking.gapMinMs, maxMs: chunking.gapMaxMs },
+              }
+              : {}),
           });
           textReceipt = createDeliveryReceipt({
             deliveryId: messageId,
