@@ -47,7 +47,8 @@ try {
   // 最近群聊摘要：机器人自己的话显示为「你」，当前消息用 ▶ 标出，并包含它之后的消息。
   const nowMs = Date.now();
   const digest = formatChatDigest([
-    { senderName: '小蓝莓', text: '猫娘yuuki', at: nowMs - 60_000 },
+    { senderName: '小蓝莓', text: '猫娘yuuki', at: nowMs - 90_000 },
+    { isSelf: true, senderName: 'yuri', text: '我先说的', at: nowMs - 70_000 },
     { messageId: 'cur', senderName: 'yuuki🍁', text: '才不是！', at: nowMs - 30_000 },
     { isSelf: true, senderName: 'yuri', text: '我才不是猫娘', at: nowMs - 20_000 },
     { senderName: '初童新月', senderIsBot: true, text: '像什么像', at: nowMs - 10_000 },
@@ -60,6 +61,10 @@ try {
     && digest.includes('▶ yuuki🍁: 才不是！')
     && digest.includes('你: 我才不是猫娘')
     && digest.includes('初童新月(机器人): 像什么像'),
+    JSON.stringify(digest));
+  check('digest includes bot messages both before and after current',
+    digest.includes('你: 我先说的') && digest.includes('你: 我才不是猫娘')
+    && digest.indexOf('你: 我先说的') < digest.indexOf('▶') && digest.indexOf('▶') < digest.indexOf('你: 我才不是猫娘'),
     JSON.stringify(digest));
   const digestOrder = digest.indexOf('小蓝莓: 猫娘yuuki') < digest.indexOf('▶ yuuki🍁: 才不是！')
     && digest.indexOf('▶ yuuki🍁: 才不是！') < digest.indexOf('你: 我才不是猫娘');
