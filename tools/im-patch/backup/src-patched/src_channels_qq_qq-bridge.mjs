@@ -1355,13 +1355,18 @@ export class QqHarnessBridge {
     if (Array.isArray(config.botIds) && config.botIds.length > 0
       && !config.botIds.includes(this.#botId)) return false;
     const text = safeText(message);
-    // 主人发的图片（比如「大肥鱼的照片」）即使没文字也让 AI 看一眼；普通图片/文件仍跳过。
-    const ownerImage = isOwnerSender(message, this.#ownerUserOpenid) && hasQqImageAttachments(message);
+    // 本地补丁：主人单独发的消息（可能很短、也可能是表情/图片）一律进入“看一眼”，
+    // 由 AI 结合上下文判断是不是在跟它说话。其他群友的短碎片仍然不看。
+    const ownerMessage = isOwnerSender(message, this.#ownerUserOpenid);
+    const ownerImage = ownerMessage && hasQqImageAttachments(message);
+    // 本地补丁：引用/回复消息也交给 AI 判断（引用的是机器人自己→该回；引用别人→静默）。
+    // 不依赖内存里的 #botTexts，重启前的旧消息被引用也能识别。
+    const quoteRef = Boolean(qqReplyReference(message));
     if (text.startsWith('/')) return false;
-    if (!text && !ownerImage) return false;
+    if (!text && !ownerImage && !quoteRef) return false;
     const trimmed = text.trim();
     // 太短 / 纯符号的碎片（「你就是」「？」「草」）不watch，避免替别人脑补接话。
-    if (!ownerImage) {
+    if (!ownerMessage && !quoteRef) {
       const minChars = Number(config.minChars);
       if (Number.isFinite(minChars) && minChars > 0 && trimmed.length < minChars) return false;
       if (!/[\p{L}\p{N}]/u.test(trimmed)) return false;
@@ -1378,7 +1383,7 @@ export class QqHarnessBridge {
       : null;
     if (text && Array.isArray(topics) && topics.length > 0
       && !topics.some((word) => typeof word === 'string' && word && trimmed.includes(word))) return false;
-    if (!ownerImage && config.textOnly !== false
+    if (!ownerMessage && !quoteRef && config.textOnly !== false
       && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
     if (message.kind === 'c2c' && config.direct !== true) return false;
     if (message.kind === 'group') {
@@ -1391,7 +1396,7 @@ export class QqHarnessBridge {
     // 活跃群模式：最近 activityWindowMinutes 分钟内至少 activityMinMessages 条才“看一眼”。
     const activityWindow = Number(config.activityWindowMinutes);
     const activityMin = Number(config.activityMinMessages);
-    if (!ownerImage && Number.isFinite(activityWindow) && activityWindow > 0
+    if (!ownerMessage && !quoteRef && Number.isFinite(activityWindow) && activityWindow > 0
       && Number.isFinite(activityMin) && activityMin > 0) {
       const nowForActivity = Date.now();
       const recentCount = (this.#recentChat.get(key) ?? [])
@@ -2570,8 +2575,20 @@ export class QqHarnessBridge {
       if (watchMode) {
         const watchConfig = readBehaviorConfig().watch;
         const custom = typeof watchConfig?.instruction === 'string' ? watchConfig.instruction.trim() : '';
-        const instruction = custom
+        const baseInstruction = custom
           || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准；⑤ 别人在讨论你的提示词/人设/设定（那不是在跟你说话）。想接就正常回一两句，不要提这条提示。';
+        // 主人单独发的消息（可能很短/只是表情）：放宽为“结合上下文判断是不是在叫我”。
+        const ownerWatch = isOwnerSender(message, this.#ownerUserOpenid);
+        const ownerExtra = ownerWatch
+          ? '\n这条是主人单独发的消息：结合上下文判断是不是在跟你说话——像「不理我」「在吗」「说话」这类就是在叫你要回；明显在跟别人说或自言自语才静默。'
+          : '';
+        const instruction = `${baseInstruction}${ownerExtra}`;
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+      }
+      // 本地补丁：引用/回复消息——让模型判断引用的是不是它自己。
+      if (watchMode && qqReplyReference(message)) {
+        const instruction = '这条是引用/回复消息：判断引用的是不是你刚刚说过的话——如果引用的是你、或对方明显在问你，就正常回；如果引用的是别人的话、不是在跟你说话，就只输出 <dsh_im_silent/>。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
@@ -2589,6 +2606,12 @@ export class QqHarnessBridge {
           text = `${text}\n\n[系统提示] ${instruction}`;
           if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
         }
+      }
+      // 本地补丁：真正被点名（名字/@/引用）时，不让模型用「不抢话」当理由沉默。
+      if (!watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
+        const instruction = '【点名】这条消息明确叫到了你（名字/@/引用你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
       // QQ stream_messages can acknowledge a final frame without rendering it in
       // some C2C clients. Standard Markdown delivery is the reliable reply path.
