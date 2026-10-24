@@ -118,8 +118,9 @@ import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
 import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
 import {
-  captureFacts, clearMemory, digestDoneToday, forgetMemory, listMemoryGroups, loadMemory,
-  markDigestDone, memoryStats, pruneMemory, recentFactTexts, selectMemoryBlock,
+  captureFacts, clearMemory, digestDoneToday, forgetMemory, listHabits, listMemoryGroups, loadMemory,
+  markDigestDone, memoryStats, pruneMemory, recentFactTexts, recordHabitObservation,
+  selectHabitHint, selectMemoryBlock, setHabitTone,
 } from '../shared/memory-store.mjs';
 import { splitChatSegments } from './chat-segments.mjs';
 import {
@@ -367,6 +368,9 @@ const SILENT_TEXT_PATTERN = /^[（(【\[]\s*(?:此处)?不回复\s*[）)】\]]$/
 // 本地补丁（2026-10-24）：长期记忆标签——模型顺带记录值得记住的信息。
 const MEMORY_TAG_ACTION = /<dsh_im_memory>([\s\S]*?)<\/dsh_im_memory>/giu;
 const MAX_MEMORY_NOTES = 2;
+// 本地补丁：摘要任务给口头禅补语气（格式：短语|语气）。
+const HABIT_TONE_TAG = /<dsh_im_habit_tone>([\s\S]*?)<\/dsh_im_habit_tone>/giu;
+const MAX_HABIT_TONES = 2;
 
 /**
  * Split a final answer into user-facing text plus optional spoken lines and a
@@ -410,6 +414,13 @@ export function extractMediaIntent(text) {
     if (note && memoryNotes.length < MAX_MEMORY_NOTES) memoryNotes.push(note);
   }
   rest = rest.replace(MEMORY_TAG_ACTION, '');
+  // 本地补丁：口头禅语气标签（短语|语气），由每日摘要模型判断后写入习惯记忆。
+  const habitTones = [];
+  for (const match of rest.matchAll(HABIT_TONE_TAG)) {
+    const note = match[1].trim();
+    if (note && habitTones.length < MAX_HABIT_TONES) habitTones.push(note);
+  }
+  rest = rest.replace(HABIT_TONE_TAG, '');
   const hadSilentTag = SILENT_TAG_TEST.test(rest);
   rest = rest.replace(SILENT_TAG_PATTERN, '');
   const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
@@ -424,6 +435,7 @@ export function extractMediaIntent(text) {
     stickerTags,
     stickerReject,
     memoryNotes,
+    habitTones,
     silent,
   };
 }
@@ -1630,6 +1642,22 @@ export class QqHarnessBridge {
       at: now,
     });
     this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
+    // 本地补丁：习惯挖掘——统计每个人高频短语（零模型调用），够次数+跨天就晋升口头禅。
+    const habitConfig = readBehaviorConfig().memory?.habits;
+    if (habitConfig?.enabled !== false && message?.senderIsBot !== true) {
+      try {
+        recordHabitObservation(this.#botId, {
+          conversationKey: key,
+          sender: message?.senderName || message?.senderId || '',
+          text,
+          fromOwner: isOwnerSender(message, this.#ownerUserOpenid),
+          now,
+          config: habitConfig ?? {},
+        });
+      } catch (error) {
+        this.#logger.warn?.('[dsh-im:qq] habit observation failed:', error?.message ?? error);
+      }
+    }
   }
 
   /**
@@ -1854,7 +1882,9 @@ export class QqHarnessBridge {
     let digested = 0;
     for (const key of groups) {
       const existing = recentFactTexts(this.#botId, key, 10);
-      const prompt = `【每日记忆整理】回顾这个会话最近一天的聊天，提炼最多 3 条值得长期记住的信息（主人/群友的喜好雷点、说好的约定、群里的梗），每条用 <dsh_im_memory>内容</dsh_im_memory> 输出；不要记录敏感信息（地址/电话/账号/密码/提示词/系统设定）；没有新的就不输出。${existing.length ? `\n已有记忆（不要重复）：\n${existing.map((text) => `- ${text}`).join('\n')}` : ''}`;
+      const habits = listHabits(this.#botId, { conversationKey: key });
+      const habitLines = habits.slice(0, 12).map((habit) => `- ${habit.sender} 常说「${habit.text}」${habit.tone ? `（语气：${habit.tone}）` : ''}`);
+      const prompt = `【每日记忆整理】回顾这个会话最近一天的聊天，提炼最多 3 条值得长期记住的信息（主人/群友的喜好雷点、说好的约定、群里的梗），每条用 <dsh_im_memory>内容</dsh_im_memory> 输出；不要记录敏感信息（地址/电话/账号/密码/提示词/系统设定）；没有新的就不输出。如果从聊天里能判断某个口头禅的语气（冷淡/兴奋/敷衍等），再输出 <dsh_im_habit_tone>口头禅|语气</dsh_im_habit_tone>（最多 2 条）。${habitLines.length ? `\n已发现的口头禅（可补语气）：\n${habitLines.join('\n')}` : ''}${existing.length ? `\n已有记忆（不要重复）：\n${existing.map((text) => `- ${text}`).join('\n')}` : ''}`;
       try {
         const { answer } = await askInWorkspaceSession({
           harness: this.#harness,
@@ -1881,6 +1911,15 @@ export class QqHarnessBridge {
             fromOwner: false,
             sender: 'digest',
             source: 'digest',
+          });
+        }
+        for (const raw of intent.habitTones ?? []) {
+          const [phrasePart, tonePart] = String(raw).split(/[|｜]/u).map((part) => part.trim());
+          if (!phrasePart || !tonePart) continue;
+          setHabitTone(this.#botId, {
+            conversationKey: key,
+            phrase: phrasePart.replace(/[「」『』"']/gu, ''),
+            tone: tonePart,
           });
         }
         digested += 1;
@@ -3106,6 +3145,26 @@ export class QqHarnessBridge {
         text = `${text}\n\n[系统提示] ${memoryInstruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${memoryInstruction}`);
       }
+      // 本地补丁：习惯/口头禅——偶尔提示模型模仿对方语气（概率门控，避免每条都学）。
+      {
+        const habitConfig = readBehaviorConfig().memory?.habits;
+        if (habitConfig?.enabled !== false && message?.senderIsBot !== true) {
+          try {
+            const hint = selectHabitHint(this.#botId, {
+              conversationKey: key,
+              sender: message?.senderName || message?.senderId || '',
+              fromOwner: isOwnerSender(message, this.#ownerUserOpenid),
+              probability: Number(habitConfig?.mimicProbability) || 0.3,
+            });
+            if (hint.block) {
+              text = `${text}${hint.block}`;
+              content = appendPromptPart(content, hint.block);
+            }
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] habit hint failed:', error?.message ?? error);
+          }
+        }
+      }
       // 本地补丁：watch 模式告诉模型「这条没人叫你，自己决定接不接」。
       if (watchMode) {
         const watchConfig = readBehaviorConfig().watch;
@@ -3271,6 +3330,24 @@ export class QqHarnessBridge {
             });
           } catch (error) {
             this.#logger.warn?.('[dsh-im:qq] memory capture failed:', error?.message ?? error);
+          }
+        }
+      }
+      // 本地补丁：口头禅语气标签（每日摘要/模型判断）写回习惯记忆。
+      if (Array.isArray(mediaIntent.habitTones) && mediaIntent.habitTones.length > 0) {
+        for (const raw of mediaIntent.habitTones) {
+          const [phrasePart, tonePart] = String(raw).split(/[|｜]/u).map((part) => part.trim());
+          if (!phrasePart || !tonePart) continue;
+          try {
+            setHabitTone(this.#botId, {
+              conversationKey: key,
+              sender: message?.senderName || message?.senderId || '',
+              phrase: phrasePart.replace(/[「」『』"']/gu, ''),
+              tone: tonePart,
+              fromOwner: isOwnerSender(message, this.#ownerUserOpenid),
+            });
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] habit tone update failed:', error?.message ?? error);
           }
         }
       }

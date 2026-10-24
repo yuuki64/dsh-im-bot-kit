@@ -1064,3 +1064,13 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **测试**：新增 `test-memory.mjs`（14 项）+ media-intent 标签解析 3 项；测试总数 **19 个全绿**。
 - 本轮工作区同时有另一路并行改动（最近群聊摘要、连发合并、媒体“别当解说员”规则），已确认与记忆功能不冲突，一起构建通过。
 
+### 18.24 口头禅 / 习惯挖掘 + 偶尔模仿（2026-10-24 第二十一轮）
+
+- **统计（零模型调用）**：`#rememberChat` 每条消息交给 `recordHabitObservation()`——短句整句（≤16 字）与中文 2~4 字片段进入候选；同一发言人同一短语 **≥6 次（片段 ≥10 次）且跨 ≥2 天** → 晋升为口头禅记忆。
+- **存储**：沿用 `memory/<botId>.json`；主人习惯跨群（`ownerHabits`），群友习惯按会话（`groups[key].habits`）；候选 30 天滚动，每群 ≤10 条、主人 ≤12 条。
+- **语气**：每日摘要提示词附上已发现的口头禅，模型判断语气后输出 `<dsh_im_habit_tone>口头禅|语气</dsh_im_habit_tone>`（最多 2 条），写回习惯记忆。
+- **偶尔模仿**：`selectHabitHint()` 按 `mimicProbability`（默认 0.3）概率给模型一段 `[对方说话习惯]` 提示（只对当前发言人，带“偶尔模仿、别每句学、别说这是学来的”约束）。
+- **隐私**：命中敏感词（地址/电话/账号/密码/提示词/系统设定）的短语不进入候选；`/memory forget/clear` 同时清理习惯与候选。
+- **测试**：`test-memory.mjs` 增至 22 项（候选提取、6 次跨 2 天晋升、语气写回、提示门控/只对本人、别人看不到）+ media-intent 语气标签解析；总数 **19 个测试全绿**。
+- 配置：`behavior.json → memory.habits`（阈值、上限、`mimicProbability`）。
+
