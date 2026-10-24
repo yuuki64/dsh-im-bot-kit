@@ -1019,3 +1019,15 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 **测试**：新增 `test-decision-budget.mjs`（预算累计/上限、决策日志读写过滤、收尾语、免打扰跨午夜）——测试总数 **18 个全绿**。**本轮代码需重启一次 DSH。**
 > 功能总览与实现索引见 [docs/features.md](../../../../im-bot-kit/docs/features.md)（镜像仓）；决策记录见 [docs/decisions-im-autonomy.md](../../../../im-bot-kit/docs/decisions-im-autonomy.md)。
 
+### 18.21 引用内容结构化 + 最近群聊上下文（2026-10-24 第十七/十八轮）
+
+**Bug 1：引用消息的 prompt 变成 `[object Object],[object Object]`**
+- 原因：引用消息的模型内容 `content` 是结构化数组（`[{type:'text'},…]`），追加系统提示时用模板字符串拼接，数组被 `String()` 成 `[object Object]`；模型看不到引用和正文，只能沉默。
+- 修复：新增 `appendPromptPart()`——string 拼接、数组追加 `{type:'text'}` part；6 处提示追加全部改用；上下文增强也跳过非字符串内容。回归测试 3 项。
+
+**Bug 2：「才不是！」看起来完全没结合上下文**
+- 原因：这条是普通文字/表情（没有 QQ 引用信息），模型看不到前一条「猫娘yuuki」，把「才不是」当成孤立一句话回答「啥才不是」。
+- 修复：群消息每轮注入 **【最近群聊（按时间顺序）】**——同会话最近 15 分钟最多 8 条（带发言人，机器人标注 `(机器人)`，排除当前消息），让模型能推断「这句话在回谁」；同时区分「被点名」与「接话窗口」两种提示（不再给接话续聊加错提示）。
+
+**测试**：18 个测试全绿。**代码改动需重启一次 DSH。**
+

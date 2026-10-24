@@ -1020,6 +1020,8 @@ export class QqHarnessBridge {
   #engagementMisses = new Map();
   // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
   #engagedTurnIds = new Set();
+  // 本地补丁：本轮是否由明确点名触发（用于区分「点名」与「接话窗口」提示）。
+  #explicitTurnIds = new Set();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1229,6 +1231,7 @@ export class QqHarnessBridge {
       return false;
     }
     if (explicit) {
+      if (message?.messageId) this.#explicitTurnIds.add(message.messageId);
       if (message?.senderIsBot !== true) this.#markEngaged(key, senderId);
       return true;
     }
@@ -1496,7 +1499,7 @@ export class QqHarnessBridge {
     return { allow: true, reason: quoteRef ? 'quote-review' : 'watch' };
   }
 
-  /** 本地补丁：记录每会话最近聊天（活跃度 + 复读检测）。 */
+  /** 本地补丁：记录每会话最近聊天（活跃度 + 复读检测 + 上下文摘要）。 */
   #rememberChat(message, key) {
     const text = safeText(message);
     if (!text) return;
@@ -1504,11 +1507,31 @@ export class QqHarnessBridge {
     const list = this.#recentChat.get(key) ?? [];
     list.push({
       senderId: message?.senderId,
+      senderName: message?.senderName || message?.senderId,
       senderIsBot: message?.senderIsBot === true,
+      messageId: message?.messageId,
       text,
       at: now,
     });
     this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
+  }
+
+  /**
+   * 本地补丁（2026-10-24）：把最近几条群聊压成一段上下文，帮助模型判断
+   * 「这句话是在回谁」——QQ 的引用/回复信息不一定能拿到，只能靠群聊顺序推断。
+   */
+  #recentChatBlock(key, currentMessageId) {
+    const now = Date.now();
+    const entries = (this.#recentChat.get(key) ?? [])
+      .filter((entry) => entry.messageId !== currentMessageId)
+      .filter((entry) => now - entry.at <= 15 * 60 * 1000)
+      .slice(-8);
+    if (entries.length < 2) return '';
+    const lines = entries.map((entry) => {
+      const name = entry.senderIsBot ? `${entry.senderName}(机器人)` : entry.senderName;
+      return `${name}: ${entry.text.replace(/\s+/gu, ' ').slice(0, 40)}`;
+    });
+    return `【最近群聊（按时间顺序）】\n${lines.join('\n')}`;
   }
 
   /** 本地补丁：记录机器人自己发过的文字（用于判断有人引用/回复它）。 */
@@ -1675,6 +1698,7 @@ export class QqHarnessBridge {
     const decision = this.#decideInbound(message, key);
     if (decision.action === 'skip') {
       this.#engagedTurnIds.delete(messageId);
+      this.#explicitTurnIds.delete(messageId);
       this.#logDecision(message, key, decision);
       return Promise.resolve();
     }
@@ -2610,6 +2634,8 @@ export class QqHarnessBridge {
     if (!['c2c', 'group'].includes(message.kind)) return;
     // 本地补丁：本轮是否由接话窗口续聊触发（消费一次）。
     const engagedTurn = this.#engagedTurnIds.delete(messageId);
+    // 本地补丁：本轮是否由明确点名触发（消费一次）。
+    const explicitTurn = this.#explicitTurnIds.delete(messageId);
     if (!alreadyRecorded) {
       if (this.#state.hasSeen(messageId)) return;
       this.#status.messagesReceived += 1;
@@ -2782,7 +2808,7 @@ export class QqHarnessBridge {
         }
       }
       // 本地补丁：真正被点名（名字/@）时，不让模型用「不抢话」当理由沉默。
-      if (!watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
+      if (explicitTurn && !watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
         const instruction = '【点名】这条消息明确叫到了你（名字/@你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
@@ -2792,6 +2818,16 @@ export class QqHarnessBridge {
         const instruction = '这条来自刚才在跟你聊天的人（接话窗口）。先轻量判断：如果对方已经转向别人、在跟别人说、或明显收尾，就只输出 <dsh_im_silent/>；如果还在跟你聊，就正常接。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
+      }
+      // 本地补丁（2026-10-24）：注入最近群聊，帮助模型判断「这句话在回谁」。
+      // QQ 的引用/回复不一定拿得到，群聊顺序往往才是可靠线索。
+      if (message.kind === 'group') {
+        const chatBlock = this.#recentChatBlock(key, messageId);
+        if (chatBlock) {
+          text = `${chatBlock}\n\n${text}`;
+          if (Array.isArray(content)) content = [{ type: 'text', text: chatBlock }, ...content];
+          else if (typeof content === 'string') content = `${chatBlock}\n\n${content}`;
+        }
       }
       // QQ stream_messages can acknowledge a final frame without rendering it in
       // some C2C clients. Standard Markdown delivery is the reliable reply path.
