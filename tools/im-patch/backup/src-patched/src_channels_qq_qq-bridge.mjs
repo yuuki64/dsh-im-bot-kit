@@ -110,7 +110,9 @@ import {
   inferStickerTags,
   isCollectableSticker,
   pickSticker,
+  removeSticker,
   saveSticker,
+  tagSticker,
 } from '../shared/sticker-library.mjs';
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { splitChatSegments } from './chat-segments.mjs';
@@ -345,6 +347,10 @@ function quotedImageName(name, index) {
 const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/giu;
 const MAX_VOICE_MESSAGES = 3;
 const STICKER_TAG_PATTERN = /<dsh_im_sticker>([\s\S]*?)<\/dsh_im_sticker>/iu;
+// 本地补丁：AI 看到群里的表情图后，给自动收藏补标签 / 判定不合人设就拒收。
+const STICKER_TAG_ACTION = /<dsh_im_sticker_tag>([\s\S]*?)<\/dsh_im_sticker_tag>/giu;
+const STICKER_REJECT_TAG = /<dsh_im_sticker_reject\s*\/?>(?:\s*<\/dsh_im_sticker_reject>)?/giu;
+const STICKER_REJECT_TEST = /<dsh_im_sticker_reject\s*\/?>/iu;
 // "I have nothing to say" — the model emits this instead of writing a meta line
 // such as "（此处不回复）", which used to be sent to the chat verbatim.
 const SILENT_TAG_PATTERN = /<dsh_im_silent\s*\/?>(?:\s*<\/dsh_im_silent>)?/giu;
@@ -374,17 +380,31 @@ export function extractMediaIntent(text) {
     stickerQuery = stickerMatch[1].trim();
     rest = rest.slice(0, stickerMatch.index) + rest.slice(stickerMatch.index + stickerMatch[0].length);
   }
+  // AI 识图后给自动收藏的表情补标签（最多 2 个词）。
+  const stickerTags = [];
+  for (const match of rest.matchAll(STICKER_TAG_ACTION)) {
+    for (const token of match[1].split(/[,，、\s|/]+/u)) {
+      const tag = token.trim();
+      if (tag && !stickerTags.includes(tag) && stickerTags.length < 2) stickerTags.push(tag);
+    }
+  }
+  rest = rest.replace(STICKER_TAG_ACTION, '');
+  // AI 认为这张表情不符合自己的人设：拒收（删掉自动收藏）。
+  const stickerReject = STICKER_REJECT_TEST.test(rest);
+  rest = rest.replace(STICKER_REJECT_TAG, '');
   const hadSilentTag = SILENT_TAG_TEST.test(rest);
   rest = rest.replace(SILENT_TAG_PATTERN, '');
   const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
-  // 有语音/表情要发时不算「静默」：静默只在什么都不发时成立。
-  const hasMedia = voiceTexts.length > 0 || stickerQuery !== null;
+  // 有语音/表情/表情动作要处理时不算「静默」。
+  const hasMedia = voiceTexts.length > 0 || stickerQuery !== null || stickerTags.length > 0 || stickerReject;
   const silent = !hasMedia && (trimmed === '' ? hadSilentTag : SILENT_TEXT_PATTERN.test(trimmed));
   return {
     text: silent ? '' : trimmed,
     voiceText: voiceTexts[0] ?? null,
     voiceTexts,
     stickerQuery,
+    stickerTags,
+    stickerReject,
     silent,
   };
 }
@@ -876,6 +896,8 @@ export class QqHarnessBridge {
   #lastSpeaker = new Map();
   // Bot-to-bot replies: throttled per conversation to avoid loops.
   #botReplies = new Map();
+  // 本地补丁：每个会话最近自动收藏的表情（给 AI 识图后打标签/拒收用）。
+  #recentStickers = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1137,7 +1159,44 @@ export class QqHarnessBridge {
         ? []
         : inferStickerTags(safeText(message), { max: Number.isInteger(config.maxTags) ? config.maxTags : 2 });
       const result = await saveSticker({ bytes, name, tags, maxLibrary: config.maxLibrary });
-      if (result.saved) this.#logger.info?.(`[dsh-im:qq] sticker collected: ${result.path}`);
+      if (result.saved) {
+        this.#logger.info?.(`[dsh-im:qq] sticker collected: ${result.path}`);
+        const key = conversationKey(message);
+        const list = this.#recentStickers.get(key) ?? [];
+        list.push({ path: result.path, at: Date.now() });
+        while (list.length > 5) list.shift();
+        this.#recentStickers.set(key, list);
+      }
+    }
+  }
+
+  /**
+   * Local patch (2026-10-24): AI 识图后的表情判决。
+   * - stickerTags：给该会话最近收藏的一张补标签（换文件名，之后按心情能挑到）
+   * - stickerReject：认为不符合人设 → 删掉这张自动收藏
+   */
+  async #applyStickerVerdict(key, { stickerTags = [], stickerReject = false } = {}) {
+    const list = this.#recentStickers.get(key);
+    if (!Array.isArray(list) || list.length === 0) return;
+    const latest = list[list.length - 1];
+    if (!latest || typeof latest.path !== 'string') return;
+    if (stickerReject) {
+      const result = await removeSticker({ path: latest.path });
+      if (result.removed) {
+        list.pop();
+        this.#logger.info?.(`[dsh-im:qq] sticker rejected by model: ${latest.path}`);
+      } else {
+        this.#logger.warn?.(`[dsh-im:qq] sticker reject skipped (${result.reason})`);
+      }
+      return;
+    }
+    if (stickerTags.length === 0) return;
+    const result = await tagSticker({ path: latest.path, tags: stickerTags });
+    if (result.tagged) {
+      latest.path = result.path;
+      this.#logger.info?.(`[dsh-im:qq] sticker tagged by model: ${result.path}`);
+    } else {
+      this.#logger.warn?.(`[dsh-im:qq] sticker tag skipped (${result.reason})`);
     }
   }
 
@@ -2278,6 +2337,12 @@ export class QqHarnessBridge {
       if (mediaIntent.silent && !mediaIntent.voiceText && !mediaIntent.stickerQuery) {
         this.#logger.info?.('[dsh-im:qq] model chose silence');
         return;
+      }
+      // AI 识图后的表情判决：补标签 / 不合人设就删掉自动收藏。
+      if (mediaIntent.stickerTags.length > 0 || mediaIntent.stickerReject) {
+        await this.#applyStickerVerdict(key, mediaIntent).catch((error) => {
+          this.#logger.warn?.('[dsh-im:qq] sticker verdict failed:', error?.message ?? error);
+        });
       }
       const textAnswer = mediaIntent.text;
       const displayAnswer = toolErrors.length > 0

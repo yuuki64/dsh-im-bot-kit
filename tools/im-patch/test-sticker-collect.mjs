@@ -3,7 +3,7 @@
 //   node tools/im-patch/test-sticker-collect.mjs
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +37,7 @@ try {
   const {
     isCollectableSticker, saveSticker, allowStickerCollection, resetStickerCollectLog,
     autoStickerStats, MIN_COLLECT_BYTES, inferStickerTags, sanitizeStickerTags, expandStickerTokens,
+    tagSticker, removeSticker,
   } = sticker;
 
   check('gif attachment is collectable', isCollectableSticker({ name: 'a.gif', mediaType: 'image/gif', size: 6000 }) === true);
@@ -79,6 +80,19 @@ try {
   check('library capped to maxLibrary', stats.count <= 2, JSON.stringify(stats));
   const names = readdirSync(libraryDir);
   check('auto files use auto_ prefix', names.every((name) => name.startsWith('auto_')), names.join(','));
+
+  // AI 识图后补标签 / 拒收（tagSticker / removeSticker）。
+  const tagTest = await saveSticker({ bytes: gifBytes(3100, 7), name: 'tag.gif', dir: libraryDir, maxLibrary: 10 });
+  check('sticker saved without tags for tagging test', tagTest.saved === true, JSON.stringify(tagTest));
+  const tagged = await tagSticker({ path: tagTest.path, tags: ['无语', '离谱'] });
+  check('tagSticker renames the file with tags', tagged.tagged === true && tagged.path.includes('_无语-离谱'), JSON.stringify(tagged));
+  const duplicateAfterTag = await saveSticker({ bytes: gifBytes(3100, 7), name: 'again.gif', dir: libraryDir, maxLibrary: 10 });
+  check('dedupe still works after tagging', duplicateAfterTag.saved === false && duplicateAfterTag.reason === 'duplicate', JSON.stringify(duplicateAfterTag));
+  const removed = await removeSticker({ path: tagged.path });
+  check('removeSticker deletes the auto sticker', removed.removed === true, JSON.stringify(removed));
+  check('removed sticker is gone from the library', !readdirSync(libraryDir).includes(basename(tagged.path)));
+  const removedAgain = await removeSticker({ path: tagged.path });
+  check('removing twice reports missing', removedAgain.removed === false && removedAgain.reason === 'missing', JSON.stringify(removedAgain));
 
   resetStickerCollectLog();
   check('rate limit allows the first one', allowStickerCollection({ perMinute: 1, perHour: 10, perDay: 40 }) === true);
