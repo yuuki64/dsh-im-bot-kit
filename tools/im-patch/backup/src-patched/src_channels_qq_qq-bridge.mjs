@@ -523,6 +523,40 @@ function isReplyTriggered(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
   return isQqMessageAddressed(message) || isNameMentioned(message, pattern);
 }
 
+// 本地补丁（2026-10-24）：群里在聊「提示词/人设」而不是在跟机器人说话时，不接话。
+const PROMPT_TALK_PATTERN = /(?:提示词|提示词里|系统提示|人设卡|人设设定|她的人设|你的人设|system\s*prompt|prompt\s*里)/iu;
+
+/** 归一化一行聊天文字，用于复读接龙比较（去 @、空白、标点、大小写）。 */
+export function normalizeRepeatText(text) {
+  return String(text ?? '')
+    .replace(/<@!?[^<>\s]+>/gu, '')
+    .replace(/[\s，。！？!?、,.…~～"“”'‘’（）()【】[\]{}]+/gu, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * 本地补丁（2026-10-24）：复读接龙检测。
+ * @param {Array<{senderId?: string, senderIsBot?: boolean, text?: string, at?: number}>} history
+ * @returns {boolean} 当前这条是否属于「多人在复读同一句」
+ */
+export function isRepeatChain(history, {
+  text, senderId, now = Date.now(), windowMinutes = 5, minSenders = 2,
+} = {}) {
+  const current = normalizeRepeatText(text);
+  if (!current) return false;
+  const windowMs = Math.max(1, Number(windowMinutes) || 5) * 60_000;
+  const senders = new Set();
+  for (const entry of Array.isArray(history) ? history : []) {
+    if (!entry || entry.senderIsBot === true) continue;
+    if (now - (Number(entry.at) || 0) > windowMs) continue;
+    if (!entry.senderId || entry.senderId === senderId) continue;
+    if (normalizeRepeatText(entry.text) !== current) continue;
+    senders.add(entry.senderId);
+  }
+  return senders.size >= Math.max(1, Number(minSenders) || 2);
+}
+
 function attachmentMediaType(attachment) {
   const value = nonEmptyString(attachment?.content_type ?? attachment?.contentType);
   if (!value) return null;
@@ -932,6 +966,10 @@ export class QqHarnessBridge {
   #recentStickers = new Map();
   // 本地补丁：watch 模式（没人叫也先看一眼）的限速记录。
   #watchHistory = new Map();
+  // 本地补丁：每个会话最近 30 分钟的聊天（活跃度 + 复读接龙判断）。
+  #recentChat = new Map();
+  // 本地补丁：复读接龙回复冷却（每个会话）。
+  #repeatReplies = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1324,6 +1362,18 @@ export class QqHarnessBridge {
       const groupId = nonEmptyString(message.groupOpenid);
       if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return false;
     }
+    // 别人在讨论她的提示词/人设（不是在跟她说话）→ 不接。
+    if (config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return false;
+    // 活跃群模式：最近 activityWindowMinutes 分钟内至少 activityMinMessages 条才“看一眼”。
+    const activityWindow = Number(config.activityWindowMinutes);
+    const activityMin = Number(config.activityMinMessages);
+    if (Number.isFinite(activityWindow) && activityWindow > 0
+      && Number.isFinite(activityMin) && activityMin > 0) {
+      const nowForActivity = Date.now();
+      const recentCount = (this.#recentChat.get(key) ?? [])
+        .filter((entry) => nowForActivity - entry.at <= activityWindow * 60_000).length;
+      if (recentCount < activityMin) return false;
+    }
     const now = Date.now();
     const state = this.#watchHistory.get(key) ?? { lastAt: 0, hits: [] };
     if (now - state.lastAt < (Number(config.minIntervalMs) || 0)) return false;
@@ -1340,6 +1390,53 @@ export class QqHarnessBridge {
     return true;
   }
 
+  /** 本地补丁：记录每会话最近聊天（活跃度 + 复读检测）。 */
+  #rememberChat(message, key) {
+    const text = safeText(message);
+    if (!text) return;
+    const now = Date.now();
+    const list = this.#recentChat.get(key) ?? [];
+    list.push({
+      senderId: message?.senderId,
+      senderIsBot: message?.senderIsBot === true,
+      text,
+      at: now,
+    });
+    this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
+  }
+
+  /**
+   * 本地补丁（2026-10-24）：群友在复读接龙（≥N 个不同的人复读同一句）时，跟着接一句。
+   * 有独立冷却，且同一 bot 每会话最多每 repeatReplyCooldownMinutes 一次。
+   */
+  #shouldJoinRepeat(message, key) {
+    const config = readBehaviorConfig().watch;
+    if (!config?.enabled) return false;
+    if (message?.senderIsBot === true) return false;
+    if (Array.isArray(config.botIds) && config.botIds.length > 0
+      && !config.botIds.includes(this.#botId)) return false;
+    if (message?.kind !== 'group') return false;
+    const text = safeText(message);
+    if (!text || text.startsWith('/')) return false;
+    if (PROMPT_TALK_PATTERN.test(text)) return false;
+    const groups = Array.isArray(config.groups) ? config.groups : [];
+    const groupId = nonEmptyString(message.groupOpenid);
+    if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return false;
+    const now = Date.now();
+    const cooldownMs = Math.max(1, Number(config.repeatReplyCooldownMinutes) || 10) * 60_000;
+    if (now - (this.#repeatReplies.get(key) ?? 0) < cooldownMs) return false;
+    const repeated = isRepeatChain(this.#recentChat.get(key) ?? [], {
+      text,
+      senderId: message?.senderId,
+      now,
+      windowMinutes: Number(config.repeatChainWindowMinutes) || 5,
+      minSenders: Number(config.repeatChainMinSenders) || 2,
+    });
+    if (!repeated) return false;
+    this.#repeatReplies.set(key, now);
+    return true;
+  }
+
   #accept(message) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.messageId);
@@ -1350,6 +1447,8 @@ export class QqHarnessBridge {
       || this.#acceptedMessageIds.has(messageId)) return Promise.resolve();
     message = normalizeQqMentions(message, new Set([this.#bot.appId]));
     const key = conversationKey(message);
+    // 本地补丁：记录聊天用于「活跃群」与「复读接龙」判断（包括不回复的消息）。
+    this.#rememberChat(message, key);
     // 本地补丁：群友发的表情（gif/webp/png 小图）顺手收进表情库，下次能自己发。
     // 不阻塞回复链路，失败只记日志。
     void this.#collectInboundStickers(message).catch((error) => {
@@ -1365,12 +1464,22 @@ export class QqHarnessBridge {
     const addressed = this.#shouldReply(message, key);
     if (addressed && !this.#allowBotReply(message, key)) return Promise.resolve();
     // 本地补丁：没人叫时也可以先看一眼（behavior.json → watch）。
-    if (!addressed && this.#allowWatch(message, key)) {
-      this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
-        this.#contextEnhancement,
-        message.kind === 'c2c' ? 'direct' : 'group',
-      ));
-      return this.#enqueueMessage(message, messageId, key, { watchMode: true });
+    if (!addressed) {
+      // 群友在复读接龙：这次跟着接一句（独立冷却）。
+      if (this.#shouldJoinRepeat(message, key)) {
+        this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
+          this.#contextEnhancement,
+          message.kind === 'c2c' ? 'direct' : 'group',
+        ));
+        return this.#enqueueMessage(message, messageId, key, { watchMode: true, repeatMode: true });
+      }
+      if (this.#allowWatch(message, key)) {
+        this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
+          this.#contextEnhancement,
+          message.kind === 'c2c' ? 'direct' : 'group',
+        ));
+        return this.#enqueueMessage(message, messageId, key, { watchMode: true });
+      }
     }
     const commandText = safeText(message);
     const menuTextOnly = !hasQqImageAttachments(message) && !hasQqFileAttachments(message)
@@ -1602,6 +1711,7 @@ export class QqHarnessBridge {
     alreadyRecorded = false,
     batchSubmission = null,
     watchMode = false,
+    repeatMode = false,
   } = {}) {
     // Persist before the message joins the in-memory chain: the chain may wait
     // behind a long turn, and a restart in that window must not lose the input.
@@ -1622,6 +1732,7 @@ export class QqHarnessBridge {
         preparedMessage,
         batchSubmission,
         watchMode,
+        repeatMode,
       }))
       .finally(async () => {
         if (releaseMessageId) this.#acceptedMessageIds.delete(messageId);
@@ -2280,6 +2391,7 @@ export class QqHarnessBridge {
     preparedMessage,
     batchSubmission = null,
     watchMode = false,
+    repeatMode = false,
   } = {}) {
     if (this.#signal?.aborted) return;
     const messageId = nonEmptyString(message?.messageId);
@@ -2417,7 +2529,13 @@ export class QqHarnessBridge {
         const watchConfig = readBehaviorConfig().watch;
         const custom = typeof watchConfig?.instruction === 'string' ? watchConfig.instruction.trim() : '';
         const instruction = custom
-          || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准。想接就正常回一两句，不要提这条提示。';
+          || '【群消息观察】这条消息没有人叫你。判定要严格：只有当这条消息明显是在叫你、回复你、或直接与你有关时才接；以下情况一律只输出 <dsh_im_silent/>，不要解释：① 别人之间的对话 ② 片段、梗、表情包配文、看不懂的内容 ③ 带「你/你就是/你觉得」但没有明确指向你的话 ④ 拿不准；⑤ 别人在讨论你的提示词/人设/设定（那不是在跟你说话）。想接就正常回一两句，不要提这条提示。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+      }
+      // 本地补丁：复读接龙——跟着大家玩梗，接一句很短的。
+      if (repeatMode) {
+        const instruction = '群里几个人在复读同一条消息，大家在玩梗：你跟上接一句很短的话（可以直接复读、+1、或者一句简短吐槽），不要长篇、不要解释、不要提这条提示。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
       }
