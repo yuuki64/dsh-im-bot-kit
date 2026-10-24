@@ -502,6 +502,22 @@ function isNameMentioned(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
   return pattern.test(text);
 }
 
+/**
+ * 本地补丁（2026-10-24）：QQ 群的 @ 在消息里用「群成员 openid」标记，平台不一定给
+ * `mentions[].is_you`，所以退一步拿 mention 的昵称/群名片对上机器人自己的名字/别名。
+ * @returns {boolean}
+ */
+export function mentionsBotByName(message, names) {
+  const wanted = new Set((Array.isArray(names) ? names : [])
+    .filter((name) => typeof name === 'string')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean));
+  if (wanted.size === 0) return false;
+  const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
+  return mentions.some((mention) => [mention?.nickname, mention?.username, mention?.name, mention?.card]
+    .some((value) => typeof value === 'string' && wanted.has(value.trim().toLowerCase())));
+}
+
 /** A group/private message the bot should actually answer. */
 function isReplyTriggered(message, pattern = DEFAULT_NAME_MENTION_PATTERN) {
   return isQqMessageAddressed(message) || isNameMentioned(message, pattern);
@@ -862,6 +878,10 @@ export class QqHarnessBridge {
   #botId;
   // Wake names for this bot: its own profile's name + aliases, else yuri's defaults.
   #nameMentionPattern = DEFAULT_NAME_MENTION_PATTERN;
+  // 本地补丁：机器人自己的名字/别名（用于识别 QQ 群 @ 里的 mention 昵称）。
+  #selfNames = Object.freeze([]);
+  // 本地补丁：每个会话只记一次「认不出的 @」诊断日志。
+  #mentionDebugKeys = new Set();
   #ownerUserOpenid;
   #harness;
   #state;
@@ -939,6 +959,9 @@ export class QqHarnessBridge {
     this.#nameMentionPattern = this.#botId
       ? nameMentionPatternForNames(profile ? [profile.name, ...profile.aliases] : [])
       : DEFAULT_NAME_MENTION_PATTERN;
+    this.#selfNames = Object.freeze(this.#botId
+      ? [profile?.name, ...(Array.isArray(profile?.aliases) ? profile.aliases : [])].filter(Boolean)
+      : ['yuri', '小鲸鱼', 'DeepSeek', '大肥鱼']);
     this.#ownerUserOpenid = ownerUserOpenid;
     this.#harness = harness;
     this.#state = state;
@@ -1038,7 +1061,19 @@ export class QqHarnessBridge {
   /** Should this message be answered? Several senders can be engaged at once. */
   #shouldReply(message, key) {
     const text = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
-    const explicit = isQqMessageAddressed(message) || isNameMentioned(message, this.#nameMentionPattern);
+    const mentionedByName = mentionsBotByName(message, this.#selfNames);
+    const explicit = isQqMessageAddressed(message)
+      || isNameMentioned(message, this.#nameMentionPattern)
+      || mentionedByName;
+    // 本地补丁：认不出的群 @（正文有 <@id> 但既非事件也不是自己）记一次诊断，
+    // 方便下次从日志确认平台返回的 mentions / rawEventType 结构。
+    if (!explicit && message?.kind === 'group' && /<@!?[^<>\s]+>/u.test(text)
+      && !this.#mentionDebugKeys.has(key)) {
+      this.#mentionDebugKeys.add(key);
+      let rawMentions = message?.mentions;
+      try { rawMentions = JSON.stringify(rawMentions); } catch { rawMentions = String(rawMentions); }
+      this.#logger.warn?.(`[dsh-im:qq] unresolved group mention debug: rawEventType=${message?.rawEventType} mentions=${rawMentions} content=${JSON.stringify(text.slice(0, 120))}`);
+    }
     const senderId = message?.senderId;
     const now = Date.now();
     // The owner calling someone an intimate nickname (宝宝/宝贝/亲爱的…) is a
@@ -1052,7 +1087,7 @@ export class QqHarnessBridge {
     }
     // Addressing someone else means the bot is no longer part of this thread.
     const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
-    const mentionsSelf = mentions.some((mention) => mention?.is_you === true);
+    const mentionsSelf = mentionedByName || mentions.some((mention) => mention?.is_you === true);
     const mentionsOther = mentions.some((mention) => mention?.is_you !== true);
     if (!explicit && mentionsOther && !mentionsSelf) {
       this.#engageMapDelete(key, senderId);
