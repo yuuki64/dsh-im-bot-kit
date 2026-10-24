@@ -46,6 +46,15 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     perDay: 40,
     maxLibrary: 800,
   }),
+  watch: Object.freeze({
+    enabled: false,
+    groups: Object.freeze([]),
+    direct: false,
+    textOnly: true,
+    minIntervalMs: 20000,
+    maxPerHour: 12,
+    instruction: '',
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),

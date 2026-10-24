@@ -898,6 +898,8 @@ export class QqHarnessBridge {
   #botReplies = new Map();
   // 本地补丁：每个会话最近自动收藏的表情（给 AI 识图后打标签/拒收用）。
   #recentStickers = new Map();
+  // 本地补丁：watch 模式（没人叫也先看一眼）的限速记录。
+  #watchHistory = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
   #spamHistory = new Map();
 
@@ -1200,6 +1202,37 @@ export class QqHarnessBridge {
     }
   }
 
+  /**
+   * 本地补丁：watch 模式——没叫机器人时也把这条消息递给他看一眼，
+   * 由 AI 自己决定接不接（不需要就在回复里只输出 <dsh_im_silent/>）。
+   * 限速与开关都在 behavior.json → watch；默认关闭。
+   */
+  #allowWatch(message, key) {
+    const config = readBehaviorConfig().watch;
+    if (!config?.enabled) return false;
+    if (message?.senderIsBot === true) return false;
+    const text = safeText(message);
+    if (!text || text.startsWith('/')) return false;
+    if (config.textOnly !== false
+      && (hasQqImageAttachments(message) || hasQqFileAttachments(message) || qqReplyReference(message))) return false;
+    if (message.kind === 'c2c' && config.direct !== true) return false;
+    if (message.kind === 'group') {
+      const groups = Array.isArray(config.groups) ? config.groups : [];
+      const groupId = nonEmptyString(message.groupOpenid);
+      if (groups.length > 0 && (!groupId || !groups.includes(groupId))) return false;
+    }
+    const now = Date.now();
+    const state = this.#watchHistory.get(key) ?? { lastAt: 0, hits: [] };
+    if (now - state.lastAt < (Number(config.minIntervalMs) || 0)) return false;
+    state.hits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
+    const limit = Number(config.maxPerHour);
+    if (Number.isFinite(limit) && limit > 0 && state.hits.length >= limit) return false;
+    state.lastAt = now;
+    state.hits.push(now);
+    this.#watchHistory.set(key, state);
+    return true;
+  }
+
   #accept(message) {
     if (this.#signal?.aborted) return Promise.resolve();
     const messageId = nonEmptyString(message?.messageId);
@@ -1224,6 +1257,14 @@ export class QqHarnessBridge {
     }
     const addressed = this.#shouldReply(message, key);
     if (addressed && !this.#allowBotReply(message, key)) return Promise.resolve();
+    // 本地补丁：没人叫时也可以先看一眼（behavior.json → watch）。
+    if (!addressed && this.#allowWatch(message, key)) {
+      this.#acceptedMessageIds.set(messageId, captureContextEnhancement(
+        this.#contextEnhancement,
+        message.kind === 'c2c' ? 'direct' : 'group',
+      ));
+      return this.#enqueueMessage(message, messageId, key, { watchMode: true });
+    }
     const commandText = safeText(message);
     const menuTextOnly = !hasQqImageAttachments(message) && !hasQqFileAttachments(message)
       && !qqReplyReference(message);
@@ -1453,6 +1494,7 @@ export class QqHarnessBridge {
     releaseMessageId = true,
     alreadyRecorded = false,
     batchSubmission = null,
+    watchMode = false,
   } = {}) {
     // Persist before the message joins the in-memory chain: the chain may wait
     // behind a long turn, and a restart in that window must not lose the input.
@@ -1472,6 +1514,7 @@ export class QqHarnessBridge {
         alreadyRecorded,
         preparedMessage,
         batchSubmission,
+        watchMode,
       }))
       .finally(async () => {
         if (releaseMessageId) this.#acceptedMessageIds.delete(messageId);
@@ -2129,6 +2172,7 @@ export class QqHarnessBridge {
     alreadyRecorded = false,
     preparedMessage,
     batchSubmission = null,
+    watchMode = false,
   } = {}) {
     if (this.#signal?.aborted) return;
     const messageId = nonEmptyString(message?.messageId);
@@ -2166,7 +2210,7 @@ export class QqHarnessBridge {
       await markMessageSeen().catch(() => undefined);
       return;
     }
-    if (!this.#shouldReply(message, key)) return;
+    if (!watchMode && !this.#shouldReply(message, key)) return;
     if (!this.#allowBotReply(message, key)) return;
 
     const target = message.replyTarget;
@@ -2180,9 +2224,8 @@ export class QqHarnessBridge {
       promptMessage.files = captureQuotedMedia(quoteScope, messageId, promptMessage.files, { kind: 'file' });
     }
     await this.#attachQuotedMedia(message, promptMessage);
-    const text = promptMessage.content;
-    const hasImages = hasInboundImages(promptMessage);
-    const hasFiles = hasInboundFiles(promptMessage);
+    let text = promptMessage.content;
+    const hasImages = hasInboundImages(promptMessage);    const hasFiles = hasInboundFiles(promptMessage);
     const hasReply = hasReplyReference(promptMessage);
     let stream = null;
     let batchSettled = batchSubmission === null;
@@ -2262,9 +2305,21 @@ export class QqHarnessBridge {
         }));
         contextEnhanced = content !== originalContent;
       }
+      // 本地补丁：watch 模式告诉模型「这条没人叫你，自己决定接不接」。
+      if (watchMode) {
+        const watchConfig = readBehaviorConfig().watch;
+        const custom = typeof watchConfig?.instruction === 'string' ? watchConfig.instruction.trim() : '';
+        const instruction = custom
+          || '【群消息观察】这条消息没有人叫你。你看到了它，自行决定：不需要接话就只输出 <dsh_im_silent/>，不要写任何解释；想接就正常回一两句。不要提到这条提示。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        if (content !== undefined) content = `${content}\n\n[系统提示] ${instruction}`;
+      }
       // QQ stream_messages can acknowledge a final frame without rendering it in
       // some C2C clients. Standard Markdown delivery is the reliable reply path.
       const toolErrors = [];
+      // 本地补丁：模型可能把 <dsh_im_silent/> 当成工具调用（不存在），
+      // 这时不向群里报错，按「静默」语义处理。
+      let attemptedSilentTool = false;
       let answer;
       let artifacts = [];
       try {
@@ -2296,15 +2351,21 @@ export class QqHarnessBridge {
             progressMode: 'all',
             finalAnswerOnly: true,
             onUpdate: (update) => {
-              if (update.error) {
-                const name = (nonEmptyString(update.toolName) ?? t('工具'))
-                  .replace(/[\r\n]+/gu, ' ')
-                  .slice(0, 80);
-                toolErrors.push(t(
-                  '工具调用「{name}」未成功，请检查工具配置或稍后重试。',
-                  { name },
-                ));
+              if (!update.error) return;
+              const rawName = nonEmptyString(update.toolName) ?? '';
+              // 文本标签被误当成工具：静默/表情类都吞掉，不往群里发错误提示。
+              if (/^dsh_im_(?:silent|sticker|voice|sticker_tag|sticker_reject)$/u.test(rawName)) {
+                if (rawName === 'dsh_im_silent') attemptedSilentTool = true;
+                this.#logger.info?.(`[dsh-im:qq] model used a virtual tag as a tool call: ${rawName}`);
+                return;
               }
+              const name = (rawName || t('工具'))
+                .replace(/[\r\n]+/gu, ' ')
+                .slice(0, 80);
+              toolErrors.push(t(
+                '工具调用「{name}」未成功，请检查工具配置或稍后重试。',
+                { name },
+              ));
             },
             onInteraction: (interaction) => this.#handleInteraction(interaction, {
               key,
@@ -2334,8 +2395,17 @@ export class QqHarnessBridge {
       // plugin turns those into a real QQ voice message and a sticker image.
       // Any sender may ask for either; the tags never reach the user.
       const mediaIntent = extractMediaIntent(answerText);
-      if (mediaIntent.silent && !mediaIntent.voiceText && !mediaIntent.stickerQuery) {
+      const hasVoiceIntent = Array.isArray(mediaIntent.voiceTexts) && mediaIntent.voiceTexts.length > 0;
+      if (mediaIntent.silent && !hasVoiceIntent && !mediaIntent.stickerQuery) {
         this.#logger.info?.('[dsh-im:qq] model chose silence');
+        return;
+      }
+      // 模型把 <dsh_im_silent/> 当成工具调用（不存在）时：视为静默，不报错、不发消息。
+      if (attemptedSilentTool && !mediaIntent.text && !hasVoiceIntent
+        && mediaIntent.stickerQuery === null
+        && mediaIntent.stickerTags.length === 0
+        && mediaIntent.stickerReject === false) {
+        this.#logger.info?.('[dsh-im:qq] model chose silence (dsh_im_silent used as a tool call)');
         return;
       }
       // AI 识图后的表情判决：补标签 / 不合人设就删掉自动收藏。
