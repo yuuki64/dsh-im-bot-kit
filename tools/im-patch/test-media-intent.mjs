@@ -187,6 +187,15 @@ try {
     && withHabitTone.habitTones[0] === '救命啊|夸张、撒娇',
     JSON.stringify(withHabitTone));
 
+  // 2026-10-25：等回答标记（超时追问）。
+  const withAsk = extractMediaIntent('你吃了吗？<dsh_im_ask>蓝莓</dsh_im_ask>');
+  check('ask tag parsed and stripped',
+    withAsk.text === '你吃了吗？' && withAsk.askTarget === '蓝莓', JSON.stringify(withAsk));
+  const withAskInfer = extractMediaIntent('你觉得呢？<dsh_im_ask></dsh_im_ask>');
+  check('ask tag without target infers', withAskInfer.askTarget === '__infer__', JSON.stringify(withAskInfer));
+  const noAsk = extractMediaIntent('今天吃什么');
+  check('no ask tag', noAsk.askTarget === '', JSON.stringify(noAsk));
+
   const one = extractMediaIntent('<dsh_im_voice>第一句</dsh_im_voice>');
   check('single voice extracted', one.voiceTexts.length === 1 && one.voiceTexts[0] === '第一句', JSON.stringify(one));
   check('single voice keeps compatibility field', one.voiceText === '第一句');
