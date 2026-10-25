@@ -158,6 +158,12 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     maxPerSender: 2,
     nudgeEnabled: true,
   }),
+  // 2026-10-25：机器人问了问题没人回 → 超时追问一次（带点语气/人设）。
+  askFollowup: Object.freeze({
+    enabled: true,
+    waitSeconds: 120,
+    maxPerDayPerConversation: 2,
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),

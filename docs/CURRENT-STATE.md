@@ -10,7 +10,7 @@
 本机跑的是 `@xmanrui/dsh-im` 5.2.0 + 22 个文件的本地补丁集（引用图片、QQ 语音、表情包、私聊/群聊双开关、群聊接续、人设注入、微信出站标签清理等）。产物 `lib/index.js` 由 `tools/im-patch/build-im.mjs` 重新打包；QQ 行为冻结，维护阶段没有新增 QQ 功能。
 
 <!-- dsh-im-status:begin -->
-<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-25T10:57:20.035Z；数字来自代码清单与实测，不要手改 -->
+<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-25T11:27:02.297Z；数字来自代码清单与实测，不要手改 -->
 
 | 项 | 实测值 |
 | --- | --- |

@@ -1132,3 +1132,14 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **测试**：`test-media-intent.mjs` 新增静默重判 4 项（首次允许 / 3 次后停止 / 30 秒过期 / 无状态为 false）；总数仍 20 个测试文件。
 - 配置：`behavior.json → watch.contextMinutes=30`（已写入）；代码改动需 apply + 重启才生效。
 
+### 18.30 问完没人答 → 超时追问（2026-10-25 第二十七轮）
+
+- **触发**：机器人发出的文字里带问句，且满足“在等某个具体的人回答”——模型用 `<dsh_im_ask>对方名字</dsh_im_ask>` 标记（不知道名字就空标签）；群聊只对明确对象或线程窗口内的人追问，泛问群里不追（Q2）。
+- **等待**：默认 **120 秒**（`askFollowup.waitSeconds`）；期间**任何非机器人消息到达即取消**（Q3：有人接话就不追）；收尾语同样取消。
+- **追问**：超时后一次轻量模型调用，生成一句很短、带语气/人设的追问（不解释、不提“没回”），按会话每天最多 **2 次**（Q6）；免打扰时段、超预算、无回复目标时不追。
+- **形态**：只追一次（Q4/Q9），群聊私聊同一套；追问发出后进入线程窗口，对方回就继续聊。
+- **实现**：`#pendingAsks` / `#followUpDays` / `#notePendingAsk` / `#fireAskFollowup`；`extractMediaIntent` 解析并剥离 `<dsh_im_ask>`。
+- **配置**：`behavior.json → askFollowup {enabled, waitSeconds, maxPerDayPerConversation}`（已写入）。
+- **视频回复“AI 味”**：异步视频回答 prompt 增加“像群友随口吐槽/接梗，不要总结、不要逐条解说、不要写总结句”，杜绝「这分工真实得有点过分了」式播报。
+- **测试**：`test-media-intent.mjs` 新增 ask 标签 3 项。
+

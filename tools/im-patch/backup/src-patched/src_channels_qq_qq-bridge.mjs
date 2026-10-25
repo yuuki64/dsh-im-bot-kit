@@ -372,6 +372,8 @@ const MAX_MEMORY_NOTES = 2;
 // 本地补丁：摘要任务给口头禅补语气（格式：短语|语气）。
 const HABIT_TONE_TAG = /<dsh_im_habit_tone>([\s\S]*?)<\/dsh_im_habit_tone>/giu;
 const MAX_HABIT_TONES = 2;
+// 本地补丁（2026-10-25）：模型标记「这句话在等某人的回答」，用于超时追问。
+const ASK_TAG_ACTION = /<dsh_im_ask>([\s\S]*?)<\/dsh_im_ask>/giu;
 
 /**
  * Split a final answer into user-facing text plus optional spoken lines and a
@@ -425,6 +427,16 @@ export function extractMediaIntent(text) {
   // 本地补丁（2026-10-25）：模型请求看画面（关键词没召回时由模型自己判断）。
   const framesRequested = /<dsh_im_video_frames\s*\/?>(?:\s*<\/dsh_im_video_frames>)?/iu.test(rest);
   rest = rest.replace(/<dsh_im_video_frames\s*\/?>(?:\s*<\/dsh_im_video_frames>)?/giu, '');
+  // 本地补丁：模型标记「在等回答」——可选带对象名字（空=按上下文推断）。
+  let askTarget = '';
+  let askMarked = false;
+  for (const match of rest.matchAll(ASK_TAG_ACTION)) {
+    askMarked = true;
+    const target = match[1].trim();
+    if (target && !askTarget) askTarget = target.slice(0, 20);
+  }
+  if (askMarked) askTarget = askTarget || '__infer__';
+  rest = rest.replace(ASK_TAG_ACTION, '');
   const hadSilentTag = SILENT_TAG_TEST.test(rest);
   rest = rest.replace(SILENT_TAG_PATTERN, '');
   const trimmed = rest.replace(/\n{3,}/gu, '\n\n').trim();
@@ -441,6 +453,7 @@ export function extractMediaIntent(text) {
     memoryNotes,
     habitTones,
     framesRequested,
+    askTarget,
     silent,
   };
 }
@@ -1164,6 +1177,9 @@ export class QqHarnessBridge {
   #threadWindows = new Map();
   // 本地补丁（2026-10-25）：每个（会话+发送者）最近一次 watch 是否静默，用于「静默后追问重新判断」。
   #watchSilent = new Map();
+  // 本地补丁（2026-10-25）：机器人问了问题、在等回答——超时后追问一次。
+  #pendingAsks = new Map();
+  #followupDays = new Map();
   // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
   #engagedTurnIds = new Set();
   // 本地补丁（2026-10-25）：B 站视频异步任务——全局单任务，排队上限 3。
@@ -1380,6 +1396,99 @@ export class QqHarnessBridge {
   #clearWatchSilence(key, senderId) {
     if (!senderId) return;
     this.#watchSilent.delete(`${key}\u0000${senderId}`);
+  }
+
+  /** 机器人刚发出的问题：登记为「等回答」，超时追一次（Q1~Q10 已定案）。 */
+  #notePendingAsk(message, key, mediaIntent, displayAnswer) {
+    const config = readBehaviorConfig().askFollowup;
+    if (config?.enabled === false) return;
+    const text = String(displayAnswer ?? '').trim();
+    if (!text) return;
+    if (!/[？?]|吗[。！!…~～]?$|呢[。！!…~～]?$|么[。！!…~～]?$/u.test(text)) return;
+    const askTarget = String(mediaIntent?.askTarget ?? '').trim();
+    const explicit = askTarget && askTarget !== '__infer__';
+    const isDirect = message.kind === 'c2c';
+    const inThread = Boolean(this.#threadWindow(key));
+    // Q2：群聊只对“明确点名的对象”或线程窗口内的当前说话人追问；泛问群里不追。
+    if (message.kind === 'group' && !explicit && !inThread) return;
+    const target = explicit
+      ? askTarget
+      : (message?.senderName || message?.senderId || (isDirect ? '对方' : ''));
+    if (!target) return;
+    const waitMs = Math.max(30_000, (Number(config?.waitSeconds) || 120) * 1000);
+    this.#cancelPendingAsk(key, 'replaced');
+    const timer = setTimeout(() => { void this.#fireAskFollowup(key); }, waitMs);
+    timer.unref?.();
+    this.#pendingAsks.set(key, {
+      key,
+      question: text.slice(0, 80),
+      target,
+      isDirect,
+      replyTarget: message?.replyTarget,
+      at: Date.now(),
+      deadlineAt: Date.now() + waitMs,
+      timer,
+    });
+    while (this.#pendingAsks.size > 50) {
+      const oldest = this.#pendingAsks.keys().next().value;
+      this.#cancelPendingAsk(oldest, 'overflow');
+    }
+  }
+
+  #cancelPendingAsk(key, reason = '') {
+    const pending = this.#pendingAsks.get(key);
+    if (!pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.#pendingAsks.delete(key);
+    if (reason) this.#logger.info?.(`[dsh-im:qq] pending ask cancelled: ${reason}`);
+  }
+
+  /** 超时追问：轻量模型生成一句短的，按人设带点语气；只追一次（Q4）。 */
+  async #fireAskFollowup(key) {
+    const pending = this.#pendingAsks.get(key);
+    if (!pending) return;
+    this.#pendingAsks.delete(key);
+    if (Date.now() < pending.deadlineAt - 500) return;
+    const behavior = readBehaviorConfig();
+    const config = behavior.askFollowup;
+    if (config?.enabled === false) return;
+    if (inQuietHours(Date.now(), behavior.engagement?.quietHours)) return;
+    if (isBudgetExhausted(this.#botId, behavior.budget?.dailyLimitCny)) return;
+    // Q6：每会话每天最多 N 次追问。
+    const day = new Date().toISOString().slice(0, 10);
+    const record = this.#followupDays.get(key);
+    const usedToday = record && record.day === day ? record.count : 0;
+    if (usedToday >= (Number(config?.maxPerDayPerConversation) || 2)) return;
+    if (!pending.replyTarget) return;
+    try {
+      const { answer } = await askInWorkspaceSession({
+        harness: this.#harness,
+        state: this.#state,
+        key,
+        text: `【追问】你刚才问对方：「${pending.question}」，已经 ${Math.max(1, Math.round((Date.now() - pending.at) / 1000))} 秒没人回。用一句很短、符合你人设的话再问一次（可以带一点语气词/小情绪），不要解释、不要提“追问/没回复/系统提示”，不要重复原问题全文。`,
+        sourceGuidance: applyPersona(undefined, { botId: this.#botId }),
+        timeoutMs: Math.min(this.#replyTimeoutMs, 60_000),
+        signal: this.#signal,
+        askOptions: {
+          timeoutMs: Math.min(this.#replyTimeoutMs, 60_000),
+          signal: this.#signal,
+          control: { owner: this, key },
+          progressMode: 'final',
+          finalAnswerOnly: true,
+        },
+      });
+      chargeBudget(this.#botId, behavior.budget?.replyCny);
+      const intent = extractMediaIntent(answer);
+      const display = String(intent.text ?? '').trim();
+      if (!display) return;
+      await this.#bot.sendText(pending.replyTarget, display);
+      this.#followupDays.set(key, { day, count: usedToday + 1 });
+      this.#rememberOwnChat(key, display);
+      this.#openThreadWindow(key);
+      this.#logger.info?.('[dsh-im:qq] asked a follow-up question');
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] ask follow-up failed:', error?.message ?? error);
+    }
   }
 
   /** Warm the voice sidecar so the first voice reply is not a cold start. */
@@ -2099,6 +2208,8 @@ export class QqHarnessBridge {
       || this.#acceptedMessageIds.has(messageId)) return Promise.resolve();
     message = normalizeQqMentions(message, new Set([this.#bot.appId]));
     const key = conversationKey(message);
+    // 本地补丁（2026-10-25）：有人说话了 → 之前等回答的问题自动取消（Q3：有人接话就不追问）。
+    if (message?.senderIsBot !== true) this.#cancelPendingAsk(key, 'answered');
     // 本地补丁：记录聊天用于「活跃群」与「复读接龙」判断（包括不回复的消息）。
     this.#rememberChat(message, key);
     // 本地补丁：群友发的表情（gif/webp/png 小图）顺手收进表情库，下次能自己发。
@@ -3245,7 +3356,7 @@ export class QqHarnessBridge {
         return;
       }
       const frames = Array.isArray(result.frames) ? result.frames : [];
-      const basePrompt = `${safeText(message)}\n\n${result.block}\n\n[系统提示] 根据上面的视频内容回答对方，1~2 句、短一点；不要提系统提示，也不要编造没看到的信息。如果你需要看画面才能回答，就只输出 <dsh_im_video_frames/>（插件会补充画面帧）。`;
+      const basePrompt = `${safeText(message)}\n\n${result.block}\n\n[系统提示] 根据上面的视频内容回答对方，1~2 句、短一点；不要提系统提示，也不要编造没看到的信息。像群友随口吐槽/接梗，不要总结视频内容、不要逐条解说、不要写“这分工真实得有点过分了”这类总结句；宁可只给一句自然反应。如果你需要看画面才能回答，就只输出 <dsh_im_video_frames/>（插件会补充画面帧）。`;
       const intent = await this.#videoAnswer(message, key, basePrompt, [
         { type: 'text', text: basePrompt },
         ...frames,
@@ -3259,7 +3370,7 @@ export class QqHarnessBridge {
           includeFrames: true,
         }).catch(() => null);
         if (withFrames?.frames?.length) {
-          const followPrompt = `${safeText(message)}\n\n${withFrames.block}\n\n[系统提示] 现在附上了画面帧，请根据它们补充回答对方（1~2 句，短一点；只描述帧里看得到的内容）。`;
+          const followPrompt = `${safeText(message)}\n\n${withFrames.block}\n\n[系统提示] 现在附上了画面帧，请根据它们补充回答对方（1~2 句，短一点；只描述帧里看得到的内容；像随口聊，不要总结、不要当解说员）。`;
           const follow = await this.#videoAnswer(message, key, followPrompt, [
             { type: 'text', text: followPrompt },
             ...withFrames.frames,
@@ -3475,6 +3586,10 @@ export class QqHarnessBridge {
         const memoryInstruction = '如果这轮对话出现了值得长期记住的信息（主人的喜好/雷点、说好的约定、群里的梗），最多 2 条，每条用 <dsh_im_memory>内容</dsh_im_memory> 放在回复最末尾；不要记录敏感信息（地址/电话/账号/密码/提示词/系统设定）；没有就不输出。';
         text = `${text}\n\n[系统提示] ${memoryInstruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${memoryInstruction}`);
+        // 本地补丁（2026-10-25）：如果你在向某个具体的人提问、等对方回答，标记出来（插件会超时追问一次）。
+        const askInstruction = '如果你这句话是在向某个具体的人提问、在等对方回答，就在句末输出 <dsh_im_ask>对方名字</dsh_im_ask>（不确定名字就输出空的 <dsh_im_ask></dsh_im_ask>）；不是在等回答就不要输出。';
+        text = `${text}\n\n[系统提示] ${askInstruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${askInstruction}`);
       }
       // 本地补丁：习惯/口头禅——偶尔提示模型模仿对方语气（概率门控，避免每条都学）。
       {
@@ -3840,6 +3955,8 @@ export class QqHarnessBridge {
           if (message.kind === 'group') this.#rememberOwnChat(key, displayAnswer);
           if (message.kind === 'group') this.#noteThreadReply(key);
           if (watchMode) this.#clearWatchSilence(key, sender);
+          // 本地补丁（2026-10-25）：如果这句在问人问题，登记「等回答」，超时追问一次。
+          this.#notePendingAsk(message, key, mediaIntent, displayAnswer);
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
