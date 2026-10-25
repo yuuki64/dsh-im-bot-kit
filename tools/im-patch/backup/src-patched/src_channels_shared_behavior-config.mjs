@@ -46,6 +46,21 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     retentionDays: 30,
     textPrefix: 24,
   }),
+  // 2026-10-25：B 站视频内容（字幕优先 + 本地 ASR 兜底；只取音频内容，不获取画面）。
+  video: Object.freeze({
+    enabled: true,
+    subtitleEnabled: true,
+    asrEnabled: true,
+    sessdata: '',
+    whisperModel: 'medium',
+    whisperDevice: 'auto',
+    maxDurationSeconds: 1800,
+    maxTranscriptChars: 6000,
+    cacheDays: 7,
+    downloadTimeoutMs: 180000,
+    subtitleTimeoutMs: 120000,
+    asrTimeoutMs: 600000,
+  }),
   // 2026-10-24：长期记忆（标签抓取 + 每日摘要 + prompt 注入）。
   memory: Object.freeze({
     enabled: true,
