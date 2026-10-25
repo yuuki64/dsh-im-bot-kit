@@ -628,6 +628,22 @@ export function shouldWarnJoke(state, now = Date.now(), { windowMs = 60_000, war
   return now - (Number(state.at) || 0) <= Math.max(1_000, Number(windowMs) || 60_000);
 }
 
+/** 本地补丁（2026-10-25）：收藏失败原因翻译成模型能转述的人话（导出便于测试）。 */
+export function stickerCollectFailureText(reason) {
+  switch (String(reason ?? '')) {
+    case 'disabled': return '自动收藏没开';
+    case 'type': return '格式不支持（只收 gif/webp/png）';
+    case 'too-small': return '图太小（小于 2KB）';
+    case 'too-large': return '图太大（超过 3MB）';
+    case 'rate-limited': return '收得太频繁，今天先不收了';
+    case 'duplicate': return '这张已经在图库里了';
+    case 'quoted-not-cached': return '引用里的图没有缓存到，让对方直接发原图';
+    case 'download-failed': return '图片下载失败';
+    case 'collect-failed': return '收藏时出错了';
+    default: return '没找到可收藏的图片';
+  }
+}
+
 /**
  * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
  * 其他机器人标「(机器人)」。导出纯函数便于测试。
@@ -1173,6 +1189,8 @@ export class QqHarnessBridge {
   #botReplies = new Map();
   // 本地补丁：每个会话最近自动收藏的表情（给 AI 识图后打标签/拒收用）。
   #recentStickers = new Map();
+  // 本地补丁（2026-10-25）：收藏任务的异步结果（用于把真实原因告诉模型）。
+  #stickerCollectRuns = new Map();
   // 本地补丁：watch 模式（没人叫也先看一眼）的限速记录。
   #watchHistory = new Map();
   // 本地补丁（2026-10-25）：被连续开玩笑 → 先说明“后面不回了”，再短时间静默。
@@ -1689,23 +1707,51 @@ export class QqHarnessBridge {
   /**
    * Local patch (2026-10-24): copy small GIF/WebP/PNG images from incoming
    * messages into the sticker library (behavior.json → stickerCollect).
-   * Runs beside the reply path and never blocks it.
+   * 2026-10-25：也支持“你引用一张表情让 yuri 收”——从引用缓存里取图；
+   * 返回真实结果，供 #process 告诉模型（避免它编造“存不进/收好了”）。
    */
   async #collectInboundStickers(message) {
     const config = (await readBehaviorConfig()).stickerCollect;
-    if (!config?.enabled) return;
-    if (config.scope === 'group' && message.kind !== 'group') return;
+    if (!config?.enabled) return { saved: 0, reason: 'disabled' };
+    if (config.scope === 'group' && message.kind !== 'group') return { saved: 0, reason: 'scope' };
     const conversationId = message.kind === 'group'
       ? nonEmptyString(message.groupOpenid)
       : nonEmptyString(message.senderId);
-    if (!conversationId) return;
+    if (!conversationId) return { saved: 0, reason: 'no-conversation' };
     if (Array.isArray(config.groups) && config.groups.length > 0
-      && !config.groups.includes(conversationId)) return;
-    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-    if (attachments.length === 0) return;
+      && !config.groups.includes(conversationId)) return { saved: 0, reason: 'group-filtered' };
     const extensions = Array.isArray(config.extensions) && config.extensions.length > 0
       ? new Set(config.extensions.map((extension) => String(extension).toLowerCase()))
       : undefined;
+    const maxBytes = Number(config.maxBytes) || 3 * 1024 * 1024;
+    const result = { saved: 0, reason: null };
+    const note = (reason) => { if (!result.reason) result.reason = reason; };
+    const remember = (path) => {
+      result.saved += 1;
+      const key = conversationKey(message);
+      const list = this.#recentStickers.get(key) ?? [];
+      list.push({ path, at: Date.now() });
+      while (list.length > 5) list.shift();
+      this.#recentStickers.set(key, list);
+    };
+    const replyContent = qqReplyReference(message)?.content ?? '';
+    const guessTags = () => (config.autoTag === false
+      ? []
+      : inferStickerTags(`${safeText(message)} ${replyContent}`, {
+        max: Number.isInteger(config.maxTags) ? config.maxTags : 2,
+      }));
+    const trySave = async (bytes, name) => {
+      const saved = await saveSticker({ bytes, name, tags: guessTags(), maxLibrary: config.maxLibrary });
+      if (saved.saved) {
+        this.#logger.info?.(`[dsh-im:qq] sticker collected: ${saved.path}`);
+        remember(saved.path);
+        return true;
+      }
+      note(saved.reason === 'duplicate' ? 'duplicate' : saved.reason);
+      return false;
+    };
+
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
     for (const attachment of attachments) {
       if (!isQqImageAttachment(attachment)) continue;
       const name = nonEmptyString(attachment?.filename) ?? '';
@@ -1716,14 +1762,14 @@ export class QqHarnessBridge {
         mediaType,
         size: Number.isFinite(declaredSize) ? declaredSize : null,
         ...(extensions ? { extensions } : {}),
-      })) continue;
+      })) { note('type'); continue; }
       const url = nonEmptyString(attachment?.url);
-      if (!url) continue;
+      if (!url) { note('download-failed'); continue; }
       if (!allowStickerCollection({
         perMinute: config.perMinute,
         perHour: config.perHour,
         perDay: config.perDay,
-      })) return;
+      })) { note('rate-limited'); break; }
       const bytes = await fetchImageBuffer(url, {
         fetchImpl: fetch,
         signal: AbortSignal.timeout(8_000),
@@ -1733,21 +1779,42 @@ export class QqHarnessBridge {
         this.#logger.warn?.('[dsh-im:qq] sticker download failed:', error?.message ?? error);
         return null;
       });
-      if (!bytes) continue;
-      // 本地补丁：按这条消息的文字猜情绪标签写进文件名，AI 之后按心情/场景挑图时能命中。
-      const tags = config.autoTag === false
-        ? []
-        : inferStickerTags(safeText(message), { max: Number.isInteger(config.maxTags) ? config.maxTags : 2 });
-      const result = await saveSticker({ bytes, name, tags, maxLibrary: config.maxLibrary });
-      if (result.saved) {
-        this.#logger.info?.(`[dsh-im:qq] sticker collected: ${result.path}`);
-        const key = conversationKey(message);
-        const list = this.#recentStickers.get(key) ?? [];
-        list.push({ path: result.path, at: Date.now() });
-        while (list.length > 5) list.shift();
-        this.#recentStickers.set(key, list);
+      if (!bytes) { note('download-failed'); continue; }
+      await trySave(bytes, name);
+    }
+
+    // 本地补丁（2026-10-25）：当前消息没有可收藏的图 → 看它引用的那条消息有没有缓存图片。
+    if (result.saved === 0) {
+      const ref = qqReplyReference(message);
+      const refId = nonEmptyString(ref?.messageId);
+      const quotedKinds = Array.isArray(ref?.attachments) ? ref.attachments : [];
+      const looksLikeImage = quotedKinds.some((attachment) => attachment?.kind === 'image');
+      if (refId && (looksLikeImage || quotedKinds.length === 0)) {
+        const scope = qqConversationScope(message);
+        const cached = quotedMediaFor(scope, refId)
+          .filter((item) => item?.kind === 'image' || String(item?.mediaType ?? '').startsWith('image/'));
+        if (cached.length === 0) {
+          note('quoted-not-cached');
+        } else {
+          for (const item of cached.slice(0, 2)) {
+            if (!allowStickerCollection({
+              perMinute: config.perMinute,
+              perHour: config.perHour,
+              perDay: config.perDay,
+            })) { note('rate-limited'); break; }
+            const bytes = item?.data ?? item?.bytes;
+            if (!Buffer.isBuffer(bytes)) { note('download-failed'); continue; }
+            if (bytes.length < 2048) { note('too-small'); continue; }
+            if (bytes.length > maxBytes) { note('too-large'); continue; }
+            const name = nonEmptyString(item?.name) ?? `sticker-${refId}.gif`;
+            await trySave(bytes, name);
+          }
+        }
+      } else {
+        note('no-image');
       }
     }
+    return result;
   }
 
   /**
@@ -2276,9 +2343,15 @@ export class QqHarnessBridge {
     // 本地补丁：记录聊天用于「活跃群」与「复读接龙」判断（包括不回复的消息）。
     this.#rememberChat(message, key);
     // 本地补丁：群友发的表情（gif/webp/png 小图）顺手收进表情库，下次能自己发。
-    // 不阻塞回复链路，失败只记日志。
-    void this.#collectInboundStickers(message).catch((error) => {
+    // 2026-10-25：收藏任务异步跑，但把真实结果留给 #process 告诉模型（不阻塞回复）。
+    const collectRun = this.#collectInboundStickers(message).catch((error) => {
       this.#logger.warn?.('[dsh-im:qq] sticker collection failed:', error?.message ?? error);
+      return { saved: 0, reason: 'collect-failed' };
+    });
+    this.#stickerCollectRuns.set(messageId, collectRun);
+    void collectRun.finally(() => {
+      const timer = setTimeout(() => this.#stickerCollectRuns.delete(messageId), 60_000);
+      timer.unref?.();
     });
     // 主人 /memory：查看/删除/清空长期记忆。
     const memoryCommand = /^\/(?:memory|记忆)(?:\s+(\S+))?(?:\s+([\s\S]+))?$/iu.exec(safeText(message));
@@ -3514,6 +3587,17 @@ export class QqHarnessBridge {
       promptMessage.files = captureQuotedMedia(quoteScope, messageId, promptMessage.files, { kind: 'file' });
     }
     await this.#attachQuotedMedia(message, promptMessage);
+    // 本地补丁（2026-10-25）：等收藏任务收尾（最多等 3 秒，避免下载慢拖住回复），拿真实成功/失败原因。
+    const stickerCollectRun = this.#stickerCollectRuns.get(messageId);
+    const stickerCollect = stickerCollectRun
+      ? await Promise.race([
+        stickerCollectRun.catch(() => null),
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(null), 3_000);
+          timer.unref?.();
+        }),
+      ])
+      : null;
     let text = promptMessage.content;
     const hasImages = hasInboundImages(promptMessage);    const hasFiles = hasInboundFiles(promptMessage);
     const hasReply = hasReplyReference(promptMessage);
@@ -3655,6 +3739,19 @@ export class QqHarnessBridge {
         const askInstruction = '如果你这句话是在向某个具体的人提问、在等对方回答，就在句末输出 <dsh_im_ask>对方名字</dsh_im_ask>（不确定名字就输出空的 <dsh_im_ask></dsh_im_ask>）；不是在等回答就不要输出。';
         text = `${text}\n\n[系统提示] ${askInstruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${askInstruction}`);
+      }
+      // 本地补丁（2026-10-25）：把表情收藏的真实结果告诉模型，避免它编造“收好了/存不进”。
+      {
+        const relevantReasons = new Set(['type', 'too-small', 'too-large', 'rate-limited', 'duplicate', 'quoted-not-cached', 'download-failed', 'collect-failed']);
+        const stickerRelevant = stickerCollect
+          && (stickerCollect.saved > 0 || relevantReasons.has(String(stickerCollect.reason ?? '')));
+        if (stickerRelevant) {
+          const hint = stickerCollect.saved > 0
+            ? '这张表情已经收进图库了。想给它打标签就输出 <dsh_im_sticker_tag>词1,词2</dsh_im_sticker_tag>（1~2 个词，别配文字）；觉得不合适就只输出 <dsh_im_sticker_reject/>；正文里不要提“图库/收藏/系统”。'
+            : `这张表情没有收进图库（原因：${stickerCollectFailureText(stickerCollect.reason)}）。不要声称收藏成功；被问起就按这个原因简短说明，不要说“系统/提示词”。`;
+          text = `${text}\n\n[系统提示] ${hint}`;
+          content = appendPromptPart(content, `\n\n[系统提示] ${hint}`);
+        }
       }
       // 本地补丁：习惯/口头禅——偶尔提示模型模仿对方语气（概率门控，避免每条都学）。
       {
