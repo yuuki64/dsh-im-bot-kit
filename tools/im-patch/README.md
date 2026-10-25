@@ -1154,3 +1154,13 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **2026-10-25 追加（用户要求）**：**不写死“后面不回了”这类固定句式**——阈值那一轮由机器人自己决定怎么带过（吐槽/反问/直接沉默都可以），只是之后照样短静默；阈值轮若模型选择沉默，也会进入静默，避免连续刷屏。
 - 本批改动已 apply（构建更新），需重启一次 DSH 生效。
 
+### 18.32 QQ 收藏表情全量导入（2026-10-25 第二十九轮）
+
+- **数据源**：`<QQ_DATA_ROOT>\qq\Tencent Files\<QQ号>\nt_qq\nt_data\Emoji\personal_emoji\Ori`（原图 2409 张）；QQ 收藏上限 500，按 mtime 最新 500 张视为当前收藏（更早的是被顶掉后残留缓存）。
+- **格式坑**：QQ 把收藏表情统一存成 `.jpg` 后缀，但真实文件头混杂（抽样 300 张：JPG 222 / **GIF 62** / PNG 15 / WebP 1）。导入脚本按 magic bytes 纠正扩展名，动图不会丢；>3MB 的用 Pillow 压缩（GIF 保留帧与 loop）。
+- **打标签**：15 批 × 约 34 张，交给子代理用 `read_image` 逐张看缩略图（Thumb），按情绪/内容词表给 1~2 个标签；500/500 全部覆盖，只有 9 张落到「随机」。
+- **入库**：`auto_<sha1-16>_<tags>.<ext>`；旧库 492 张移到 `~/.dsh/integrations/dsh-im/_archive/stickers-old-20261025`（未删，可回滚）；`stickers.json` 只保留管理目录（移除旧的 QQ 帧缓存只读目录）；`stickerCollect.maxLibrary` 800→3000。
+- **结果**：表情库 **500 张 / 187.7MB（jpg 327、gif 140、png 33）**；按标签挑图验证通过（可爱/无语/猫/开心/摆烂/生气 都能命中对应文件）。
+- **工具**：`sticker-admin.mjs`（list/add/delete/批量删）、`sticker-qq-import.py`（挑选+格式纠正+压缩+分批）、`sticker-import-run.mjs`（标签入库）。
+- 纯文件与配置改动，**不需要重启**；下次自动收藏超过 3000 才会按旧→新淘汰。
+
