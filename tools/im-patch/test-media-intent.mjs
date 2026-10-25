@@ -21,6 +21,7 @@ try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
     appendPromptPart, mergeCoalescedMessages, formatChatDigest, isNudgeMessage,
+    silenceRecheckAllowed,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
   const { pickProactiveText } = await import(src('src/channels/qq/qq-proactive.mjs'));
 
@@ -28,6 +29,15 @@ try {
   check('nudge: 你怎么不回蓝莓', isNudgeMessage('你怎么不回蓝莓') === true);
   check('nudge: 为什么不理人家', isNudgeMessage('为什么不理人家') === true);
   check('nudge: 普通消息不算', isNudgeMessage('今天吃什么') === false);
+  // 2026-10-25：上一次 watch 静默后，同一人的追问允许重新判断（最多 3 次/30 秒）。
+  const silentAt = Date.now();
+  check('silence recheck allowed for first follow-up',
+    silenceRecheckAllowed({ at: silentAt, count: 1 }, silentAt + 1000) === true);
+  check('silence recheck stops after 3 silences',
+    silenceRecheckAllowed({ at: silentAt, count: 3 }, silentAt + 1000) === false);
+  check('silence recheck expires after 30s',
+    silenceRecheckAllowed({ at: silentAt, count: 1 }, silentAt + 31_000) === false);
+  check('silence recheck without state is false', silenceRecheckAllowed(null) === false);
   const proactiveTexts = {
     group: ['大家早'],
     direct: ['你早'],

@@ -148,6 +148,8 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     // 别人在聊她的提示词/人设（不是跟她说话）时不接。
     skipPromptTalk: true,
     instruction: '',
+    // 2026-10-25：watch 注入的“最近群聊”上下文窗口（分钟）。太短会让晚到的接话看不到机器人上一句。
+    contextMinutes: 30,
   }),
   // 2026-10-25：线程窗口——机器人发言后的一小段时间内，其他人接话/反应优先交给模型判断。
   threadWindow: Object.freeze({

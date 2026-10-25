@@ -596,6 +596,16 @@ export function isNudgeMessage(text) {
 }
 
 /**
+ * 本地补丁（2026-10-25）：上一次 watch 判断是“静默”时，同一发送者的下一句不再被冷却硬跳过
+ * （否则像「你说的是…这条等着吃的鱼」这种分段追问会被整段吞掉）；连续静默 3 次后恢复正常冷却。
+ */
+export function silenceRecheckAllowed(state, now = Date.now(), { limit = 3, windowMs = 30_000 } = {}) {
+  if (!state) return false;
+  if ((Number(state.count) || 0) >= Math.max(1, Number(limit) || 3)) return false;
+  return now - (Number(state.at) || 0) <= Math.max(1_000, Number(windowMs) || 30_000);
+}
+
+/**
  * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
  * 其他机器人标「(机器人)」。导出纯函数便于测试。
  */
@@ -1152,6 +1162,8 @@ export class QqHarnessBridge {
   #engagementMisses = new Map();
   // 本地补丁（2026-10-25）：线程窗口——机器人发言后的一小段时间内，其他人接话优先判断。
   #threadWindows = new Map();
+  // 本地补丁（2026-10-25）：每个（会话+发送者）最近一次 watch 是否静默，用于「静默后追问重新判断」。
+  #watchSilent = new Map();
   // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
   #engagedTurnIds = new Set();
   // 本地补丁（2026-10-25）：B 站视频异步任务——全局单任务，排队上限 3。
@@ -1350,6 +1362,24 @@ export class QqHarnessBridge {
     if (!state) return;
     state.silences = 0;
     state.until = Date.now() + Math.max(30, Number(readBehaviorConfig().threadWindow?.seconds) || 120) * 1000;
+  }
+
+  /** 记录一次 watch 静默（30 秒内同一发送者最多重判 3 次，之后恢复冷却）。 */
+  #noteWatchSilence(key, senderId) {
+    if (!senderId) return;
+    const mapKey = `${key}\u0000${senderId}`;
+    const previous = this.#watchSilent.get(mapKey);
+    const sameBurst = previous && Date.now() - (Number(previous.at) || 0) <= 30_000;
+    this.#watchSilent.set(mapKey, {
+      at: Date.now(),
+      count: sameBurst ? (Number(previous.count) || 0) + 1 : 1,
+    });
+    while (this.#watchSilent.size > 200) this.#watchSilent.delete(this.#watchSilent.keys().next().value);
+  }
+
+  #clearWatchSilence(key, senderId) {
+    if (!senderId) return;
+    this.#watchSilent.delete(`${key}\u0000${senderId}`);
   }
 
   /** Warm the voice sidecar so the first voice reply is not a cold start. */
@@ -1702,8 +1732,10 @@ export class QqHarnessBridge {
     const state = this.#watchHistory.get(key) ?? { lastAtBySender: {}, hits: [] };
     if (!state.lastAtBySender || typeof state.lastAtBySender !== 'object') state.lastAtBySender = {};
     const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
-    // 引用消息、主人消息不按发送者冷却；线程窗口/补偿判断也绕过冷却。
-    const bypassSenderCooldown = quoteRef || ownerMessage || thread || force;
+    // 引用消息、主人消息不按发送者冷却；线程窗口/补偿判断也绕过冷却；
+    // 上一次 watch 是静默时，同一人的追问也重新判断（不超过 3 次）。
+    const silentRecheck = silenceRecheckAllowed(this.#watchSilent.get(`${key}\u0000${senderId}`));
+    const bypassSenderCooldown = quoteRef || ownerMessage || thread || force || silentRecheck;
     if (!bypassSenderCooldown
       && now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) {
       return deny('sender-cooldown');
@@ -1764,9 +1796,10 @@ export class QqHarnessBridge {
    */
   #recentChatBlock(key, message) {
     const messageId = message?.messageId ?? null;
+    const contextMinutes = Number(readBehaviorConfig().watch?.contextMinutes) || 30;
     return formatChatDigest(this.#recentChat.get(key) ?? [], {
       now: Date.now(),
-      minutes: 15,
+      minutes: contextMinutes,
       maxChars: 40,
       limitBefore: 25,
       limitAfter: 4,
@@ -3665,6 +3698,7 @@ export class QqHarnessBridge {
           }
         }
         if (watchMode) this.#noteThreadSilence(key);
+        if (watchMode) this.#noteWatchSilence(key, sender);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent', engagedTurn });
         return;
       }
@@ -3680,6 +3714,7 @@ export class QqHarnessBridge {
           }
         }
         if (watchMode) this.#noteThreadSilence(key);
+        if (watchMode) this.#noteWatchSilence(key, sender);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent-tool', engagedTurn });
         return;
       }
@@ -3804,6 +3839,7 @@ export class QqHarnessBridge {
           this.#rememberBotText(key, displayAnswer);
           if (message.kind === 'group') this.#rememberOwnChat(key, displayAnswer);
           if (message.kind === 'group') this.#noteThreadReply(key);
+          if (watchMode) this.#clearWatchSilence(key, sender);
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
