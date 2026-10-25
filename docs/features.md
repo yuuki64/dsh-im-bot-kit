@@ -29,6 +29,8 @@
 | 免打扰 | 01:00–07:00 只回点名/@；watch/复读/窗口续聊不触发 | `inQuietHours` |
 | 拒绝/被叫停 | 命中「别说话/没叫你…」→ 回一句短确认后沉默 | `DISMISS_PATTERN`、`DISMISS_ACKS` |
 | 决策预算 | 预算超限后只回点名/@、引用、复读 | `#watchDecision`、`cost-budget.mjs` |
+| 线程窗口 | 机器人群内发言后 120 秒内，其他人接话/反应绕过 per-sender 冷却与小时/日上限，交给模型判断（每人最多 2 次；收尾/连续 2 次沉默/超时退出） | `#threadWindows`、`#openThreadWindow`、`#decideInbound`、`#watchDecision({thread})` |
+| 提醒漏回补偿 | 「你怎么不回 X / 为什么不理人家」→ 触发一次补偿判断，结合上下文判断是否在跟自己说话 | `isNudgeMessage()`、`#watchDecision({force})` |
 
 ## 3. 消息发送形态
 
@@ -47,7 +49,7 @@
 
 | 功能 | 说明 | 实现位置 |
 |---|---|---|
-| 模板定时消息 | 07:45/11:45/17:45，±25 分钟打散，群需安静 20 分钟；每目标 120 分钟冷却、每天 3 条 | `qq-proactive.mjs`、`behavior.json → proactive` |
+| 模板定时消息 | 07:45/11:45/17:45，±25 分钟打散，群需安静 20 分钟；每目标 120 分钟冷却、每天 3 条；**群聊/私聊模板分池**（群里用「大家/你们」，私聊用单人称） | `qq-proactive.mjs`、`pickProactiveText(texts, slot, random, kind)`、`behavior.json → proactive.bots.<id>.texts` |
 | 私聊目标 | `c2c:<owner openid>`，整数点发不打散，窗口 90 分钟 | 同上 |
 | AI 主动冒泡 | 群安静 ≥15 分钟时，模型结合上下文自己说一句；45±20 分钟检查、概率 35%、每群每天 6 条、08–23 点 | `#generateProactiveBubble`、`qq-proactive.mjs` aiBubbles |
 | 预算联动 | 超预算后冒泡自动停 | `generateProactiveBubble` 开头预算检查 |
