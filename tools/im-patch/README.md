@@ -1100,3 +1100,19 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **配置**：`video.commentsEnabled / maxComments / maxCommentChars`。
 - **待办**：画面抽帧 + 异步（Q7 已定案），下一轮实现；重启 DSH 生效。
 
+### 18.27 「对方在接我的话」窗口 + watch 额度调整（2026-10-25 第二十四轮）
+
+**现象**：yuri 发完一句玩笑后，蓝莓连发三条反应（「唔诶」「好不卫生」「[嫌弃]」），yuri 全部没回；k 问「你怎么不回蓝莓」也没回。
+
+**日志定位**（`decision-log`）：
+- 「唔诶」→ 进了 watch，但模型自己选择 `model-silent`；
+- 「好不卫生」「[嫌弃]」→ `sender-cooldown`（同一发送者 1 分钟内只 review 一次，被挡）；
+- k 的问题 → `hour-cap`（watch 每小时 6 次额度已用完）。
+
+**修复**：
+- 新增 `#lastBotReplyAt`（每会话机器人最后发言时间）；**发言后 120 秒内，对方消息不按发送者冷却**（绕过 `sender-cooldown`），视为「在接我的话」；
+- watch 提示追加：刚发过言时，对方哪怕只回一个词/表情，也要当作对话判断，别一律静默；
+- 线上 `behavior.json → watch.maxPerHour 6→12、maxPerDay 30→40`；`minIntervalMs` 仍 1 分钟。
+
+**测试**：20 个测试全绿（本轮只改 watch 路径，无新增离线用例）；重启 DSH 生效（`maxPerHour` 配置本身热生效）。
+
