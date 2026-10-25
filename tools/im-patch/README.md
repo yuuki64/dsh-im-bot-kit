@@ -1163,4 +1163,5 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **结果**：表情库 **500 张 / 187.7MB（jpg 327、gif 140、png 33）**；按标签挑图验证通过（可爱/无语/猫/开心/摆烂/生气 都能命中对应文件）。
 - **工具**：`sticker-admin.mjs`（list/add/delete/批量删）、`sticker-qq-import.py`（挑选+格式纠正+压缩+分批）、`sticker-import-run.mjs`（标签入库）。
 - 纯文件与配置改动，**不需要重启**；下次自动收藏超过 3000 才会按旧→新淘汰。
+- **显示大小（追加）**：QQ 官方机器人 API 没有“表情”消息类型，只能当图片发，所以会显示成图片。已用 `sticker-resize-library.py` 把 500 张统一缩到**最长边 200px**（GIF 保留全部动画帧与 loop、PNG 保留透明），库体积 187.7MB→70.7MB；群聊里显示会接近表情大小。原图保留在 `_sticker-import/files` 可回滚。
 
