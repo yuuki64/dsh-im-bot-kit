@@ -23,6 +23,21 @@ try {
   check('short reply stays one message', splitChatSegments('好的。') === null);
   check('empty stays null', splitChatSegments('') === null);
   check('single long sentence is not cut', splitChatSegments('这是一句非常非常长的话它没有任何句末标点所以不应该被切成两条消息即使它超过六十个字符也一样保持原样不改动它') === null);
+
+  // 2026-10-25：单句超过 80 字才按逗号兜底拆，最多 2 条。
+  const yuriLongSingle = '看完了，41 秒：全世界五亿五千万个 AI，平均每十二个人才一个，问题是怎么让另外十一个人也有，最后就念叨四遍「就这样就好」收尾。';
+  const fallbackSegments = splitChatSegments(yuriLongSingle, { maxChars: 60 });
+  check('long single sentence (86 chars) splits at comma', Array.isArray(fallbackSegments) && fallbackSegments.length === 2,
+    JSON.stringify(fallbackSegments));
+  check('long single sentence keeps all text',
+    fallbackSegments && fallbackSegments.join('').replace(/\s+/gu, '') === yuriLongSingle.replace(/\s+/gu, ''),
+    JSON.stringify(fallbackSegments));
+  check('long single sentence never exceeds 2 segments', fallbackSegments.length <= 2);
+  const mediumSingle = '这是一句六十个字左右、带逗号但没有超过八十个字上限的单句，所以不应该被拆成两条消息发出去，保持原样就好。';
+  check('single sentence under 80 chars stays whole', splitChatSegments(mediumSingle, { maxChars: 60 }) === null,
+    String(mediumSingle.length));
+  check('single sentence over 80 without commas stays whole',
+    splitChatSegments('这'.repeat(120), { maxChars: 60 }) === null);
   check('code fence stays one message', splitChatSegments('看看这段：\n```js\nconsole.log(1)\n```\n就这样，没什么别的。') === null);
   check('table stays one message', splitChatSegments('对比一下：\n| a | b |\n| 1 | 2 |\n结论你自己看。') === null);
   check('URL reply stays one message', splitChatSegments('文档在这里 https://example.com/a/b 自己看，别问我。') === null);
