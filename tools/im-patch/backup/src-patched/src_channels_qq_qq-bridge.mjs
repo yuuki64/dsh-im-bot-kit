@@ -117,6 +117,7 @@ import {
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
 import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
+import { buildBilibiliContext, extractBilibiliRefs } from '../shared/video-helper.mjs';
 import {
   captureFacts, clearMemory, digestDoneToday, forgetMemory, listHabits, listMemoryGroups, loadMemory,
   markDigestDone, memoryStats, pruneMemory, recentFactTexts, recordHabitObservation,
@@ -3125,6 +3126,26 @@ export class QqHarnessBridge {
           chatId: message.kind === 'group' ? message.groupOpenid : message.senderId,
         }));
         contextEnhanced = content !== originalContent;
+        }
+      }
+      // 本地补丁：B 站链接——字幕优先 / 本地 ASR 兜底，把视频内容注入 prompt。
+      // 群里所有人都可用（用户确认：暂时只有 B 站链接例外，后续可加白名单）。
+      {
+        const videoConfig = readBehaviorConfig().video;
+        if (videoConfig?.enabled !== false) {
+          const videoSourceText = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
+          if (extractBilibiliRefs(videoSourceText).length > 0) {
+            try {
+              const video = await buildBilibiliContext(videoSourceText, { config: videoConfig });
+              if (video?.block) {
+                this.#logger.info?.(`[dsh-im:qq] bilibili video context ready (${video.source})`);
+                text = `${text}${video.block}`;
+                content = appendPromptPart(content, video.block);
+              }
+            } catch (error) {
+              this.#logger.warn?.('[dsh-im:qq] bilibili video context failed:', error?.message ?? error);
+            }
+          }
         }
       }
       // 本地补丁：长期记忆——注入相关性挑选后的记忆块（限预算）。

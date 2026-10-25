@@ -40,6 +40,7 @@ export const FILES = Object.freeze([
   ['src_channels_shared_cost-budget.mjs', 'channels/shared/cost-budget.mjs'],
   ['src_channels_shared_decision-log.mjs', 'channels/shared/decision-log.mjs'],
   ['src_channels_shared_memory-store.mjs', 'channels/shared/memory-store.mjs'],
+  ['src_channels_shared_video-helper.mjs', 'channels/shared/video-helper.mjs'],
   ['src_channels_shared_bot-workspace-store.mjs', 'channels/shared/bot-workspace-store.mjs'],
   ['src_channels_shared_harness-client.mjs', 'channels/shared/harness-client.mjs'],
   ['src_channels_shared_group-reasoning.mjs', 'channels/shared/group-reasoning.mjs'],

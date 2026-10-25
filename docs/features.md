@@ -76,6 +76,19 @@
 | 偶尔模仿 | 按 `mimicProbability`（默认 0.3）对当前发言人给一段“可以偶尔学他语气”的提示 | `selectHabitHint()`、`#process` |
 | 测试 | `test-memory.mjs`（22 项）+ 标签解析 4 项 | `tools/im-patch/test-memory.mjs` |
 
+## 5.2 B 站视频内容（2026-10-25）
+
+| 功能 | 说明 | 实现位置 |
+|---|---|---|
+| 链接识别 | BV / av / b23 短链 / 纯 BV 号；其他站点仍走静态判断 | `extractBilibiliRefs()` |
+| 元数据（所有人） | B 站公开 view API：标题/UP主/时长/简介 | `fetchMetadata()` |
+| 字幕优先（C） | SESSDATA 生成本地 cookies → yt-dlp 取 AI 字幕；只存本机、不写日志 | `fetchSubtitles()`、`writeCookieFile()` |
+| ASR 兜底（C） | 无字幕时下音频 → faster-whisper 本地转写（CUDA 优先，CPU 兜底，零云端费用） | `downloadAudio()`、`transcribe()` |
+| prompt 注入 | 内容块注入，明确“只掌握音频/字幕、没看画面、不要编造画面” | `buildVideoPromptBlock()`、`qq-bridge.mjs` |
+| 缓存/限制 | 7 天缓存；时长上限 30 分钟；转写截断 6000 字 | `video` 配置 |
+| 依赖 | `~/.dsh/integrations/dsh-im/video/venv`（yt-dlp + faster-whisper，约 1.5~2GB 含模型缓存） | 一次性安装 |
+| 测试 | `test-video-helper.mjs` 12 项 | `tools/im-patch/test-video-helper.mjs` |
+
 ## 6. 可观测与排障
 
 | 功能 | 说明 | 实现位置 |
@@ -84,7 +97,7 @@
 | `/why [N]` | 主人查最近 N 条判定 + 今日估算花费 | `#handleWhyCommand` |
 | `/status` `/new` `/compact` 等 | 内置命令 | 上游 dsh-im + 补丁 |
 | 构建校验 | `apply.mjs` / `verify-build.mjs`（源码/产物/进程三方一致） | `tools/im-patch/*.mjs` |
-| 测试 | 19 个 `test-*.mjs` 离线测试 | `tools/im-patch/test-*.mjs` |
+| 测试 | 20 个 `test-*.mjs` 离线测试 | `tools/im-patch/test-*.mjs` |
 
 ## 7. 权限与安全
 
@@ -113,6 +126,7 @@
 | `~/.dsh/integrations/dsh-im/cost-budget.json` | 每日预算计数 | 插件写 |
 | `~/.dsh/integrations/dsh-im/decision-log/` | 决策日志（30 天） | 插件写 |
 | `~/.dsh/integrations/dsh-im/memory/<botId>.json` | 长期记忆（90 天；主人事实跨群） | 插件写 |
+| `~/.dsh/integrations/dsh-im/video/` | B 站视频依赖/缓存/cookies（venv、cache、cookies.txt） | 插件/安装脚本写 |
 
 ## 9. 已知限制
 
@@ -136,4 +150,5 @@
 | 长期记忆 | `memory.enabled=false`（热生效）；清数据用 `/memory clear` |
 | 工具裁剪 | 跑 `回滚-qq-bot-preset.bat` 并重启 |
 | 整个补丁集 | git tag `backup-before-engagement-20261024` / `manual-backup-20261024-2037.zip` |
+
 

@@ -1074,3 +1074,20 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **测试**：`test-memory.mjs` 增至 22 项（候选提取、6 次跨 2 天晋升、语气写回、提示门控/只对本人、别人看不到）+ media-intent 语气标签解析；总数 **19 个测试全绿**。
 - 配置：`behavior.json → memory.habits`（阈值、上限、`mimicProbability`）。
 
+### 18.25 B 站视频内容（2026-10-25 第二十二轮）
+
+- **背景**：群里发 B 站链接，机器人只回“打不开”。原因是链接规则禁止访问原链接 + 视频页 JS 渲染 + B 站字幕登录才给。
+- **新模块** `channels/shared/video-helper.mjs`：
+  - 识别 BV / av / b23 短链 / 纯 BV 号；
+  - **元数据**：B 站公开 view API（标题/UP主/时长/简介），游客可用；
+  - **字幕优先**：SESSDATA → 本地 `cookies.txt` → yt-dlp 取 AI 字幕（登录才有的接口）；
+  - **ASR 兜底**：无字幕时 yt-dlp 下音频 → faster-whisper 本地转写（CUDA 优先、CPU 兜底，零云端费用）；
+  - 缓存 7 天；时长上限 30 分钟；转写截断 6000 字；只取音频内容，不获取画面。
+- **注入**：`qq-bridge.mjs` 检测到 B 站链接后，把内容块塞进 prompt（`[B站视频] 标题/UP主/…/视频内容（字幕或音频转写）`），并明确“没看画面，不要编造画面细节”。
+- **权限**：B 站链接是唯一例外——**群里所有人**都可以触发（主人确认：暂时只有 bilibili 例外，后续可加白名单）；其他站点仍走静态判断 + `web_search`。
+- **依赖**（一次性，约 1.5~2GB）：`~/.dsh/integrations/dsh-im/video/venv` 里 yt-dlp + faster-whisper；ASR 脚本由插件自动生成，PyAV 兼容补丁已内置。
+- **实测**：40 秒无字幕视频 → 元数据 0.2s + ASR 约 14.7s（medium + CUDA），二次访问缓存 0.0s；无 cookie 时字幕路径返回 none，自动落到 ASR。
+- **测试**：新增 `test-video-helper.mjs` 12 项；测试总数 **20 个全绿**。
+- **配置**：`behavior.json → video`（enabled / sessdata / whisperModel / whisperDevice / 时长与截断上限 / 缓存天数）。
+- **待办**：SESSDATA 未填（主人提供后启用字幕路径）；重启 DSH 生效。
+
