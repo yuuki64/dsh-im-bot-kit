@@ -298,7 +298,8 @@ try:
     segments, info = whisper.transcribe(
         audio_path,
         language="zh",
-        vad_filter=True,
+        # 不开 VAD：VAD 会把带 BGM/唱歌/重复的片段当静音滤掉，导致转写只到前十几秒。
+        vad_filter=False,
         beam_size=5,
         condition_on_previous_text=False,
     )
@@ -390,8 +391,9 @@ function writeCache(bvid, payload) {
 
 /** 生成注入 prompt 的视频内容块。 */
 export function buildVideoPromptBlock(meta, transcript, { maxChars = 6000, source = 'none' } = {}) {
-  const minutes = Math.max(0, Math.round(Number(meta.duration) / 60));
-  const seconds = Math.max(0, Math.round(Number(meta.duration) % 60));
+  const totalSeconds = Math.max(0, Math.round(Number(meta.duration) || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   const duration = `${minutes}分${String(seconds).padStart(2, '0')}秒`;
   const desc = String(meta.desc ?? '').replace(/\s+/gu, ' ').trim().slice(0, 200);
   const lines = [
