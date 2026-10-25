@@ -1,4 +1,4 @@
-﻿# dsh-im 5.2.0 本地补丁：引用图片 + QQ 语音
+# dsh-im 5.2.0 本地补丁：引用图片 + QQ 语音
 
 > 本补丁集合并了两个会话的成果：
 > - **引用消息取图（群归档）**：`bot-workspace` 会话完成 —— `group-history-store.mjs` 的
@@ -1164,4 +1164,14 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **工具**：`sticker-admin.mjs`（list/add/delete/批量删）、`sticker-qq-import.py`（挑选+格式纠正+压缩+分批）、`sticker-import-run.mjs`（标签入库）。
 - 纯文件与配置改动，**不需要重启**；下次自动收藏超过 3000 才会按旧→新淘汰。
 - **显示大小（追加）**：QQ 官方机器人 API 没有“表情”消息类型，只能当图片发，所以会显示成图片。已用 `sticker-resize-library.py` 把 500 张统一缩到**最长边 128px**（GIF 保留全部动画帧与 loop、PNG 保留透明），库体积 187.7MB→32.7MB；群聊里显示会接近表情大小。原图保留在 `_sticker-import/files` 可回滚。
+
+### 18.33 引用里的表情也能收 + 告诉模型真实结果（2026-10-25 第三十轮）
+
+- **案例**：主人引用别人的表情图说「yuri 把这个表情也收了」→ yuri 回「存不进图库，不过这张我记住了」。日志/代码确认：收藏器只扫**当前消息的图片附件**，引用卡片里的图不在附件里，所以没触发收藏；yuri 的“存不进”是它自己编的解释（系统没告诉它真实结果）。
+- **修复 1（引用图收藏）**：`#collectInboundStickers` 在当前消息没有可收藏图时，读取 `qqReplyReference(message).messageId`，用 `quotedMediaFor(scope, id)` 从**引用缓存**（6 小时内机器人看过的图片字节）取图并入库；引用缓存没有时返回原因 `quoted-not-cached`。
+- **修复 2（真实反馈）**：收藏任务结果存进 `#stickerCollectRuns`，`#process` 最多等 3 秒拿到 `{saved, reason}`，注入提示：
+  - 成功 → 「已收进图库，可输出 `<dsh_im_sticker_tag>` 打标签或 `<dsh_im_sticker_reject/>` 拒收；正文别提图库」；
+  - 失败 → 「没进图库（原因：格式/太小/太大/太频繁/重复/引用未缓存/下载失败）」，禁止说“收好了”，也不许提系统/提示词。
+- **测试**：`test-media-intent.mjs` 新增 4 项失败原因文案；20 个测试文件全绿。
+- 代码改动已 apply，**需重启一次 DSH** 生效。
 

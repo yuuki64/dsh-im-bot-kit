@@ -21,7 +21,7 @@ try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
     appendPromptPart, mergeCoalescedMessages, formatChatDigest, isNudgeMessage,
-    silenceRecheckAllowed, shouldWarnJoke,
+    silenceRecheckAllowed, shouldWarnJoke, stickerCollectFailureText,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
   const { pickProactiveText } = await import(src('src/channels/qq/qq-proactive.mjs'));
 
@@ -46,6 +46,11 @@ try {
     shouldWarnJoke({ count: 1, at: jokeAt }, jokeAt + 1000) === false);
   check('joke warn expires after window',
     shouldWarnJoke({ count: 2, at: jokeAt }, jokeAt + 61_000) === false);
+  // 2026-10-25：表情收藏失败原因 → 模型转述文案。
+  check('sticker failure text: type', stickerCollectFailureText('type').includes('格式') === true);
+  check('sticker failure text: quoted-not-cached', stickerCollectFailureText('quoted-not-cached').includes('引用') === true);
+  check('sticker failure text: duplicate', stickerCollectFailureText('duplicate').includes('已经在图库') === true);
+  check('sticker failure text: fallback', stickerCollectFailureText('weird').includes('没找到') === true);
   const proactiveTexts = {
     group: ['大家早'],
     direct: ['你早'],
