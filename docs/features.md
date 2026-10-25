@@ -38,6 +38,7 @@
 |---|---|---|
 | 分条发送 | 超过 20 字且 ≥2 句 → 拆成 2~3 条（单句过长不硬切） | `chat-segments.mjs`、`markdown-reply.mjs` |
 | 表情包 | `<dsh_im_sticker>标签</dsh_im_sticker>`：同义词扩展 + 标签匹配；自动收藏群友表情（文件名带情绪标签） | `sticker-library.mjs`、`pickSticker/expandStickerTokens/saveSticker` |
+| QQ 收藏表情导入 | 从 `personal_emoji/Ori` 取最新 500 张，按真实文件头纠正扩展名（.jpg 里其实有 GIF）、AI 逐张打 1~2 个标签、`auto_<sha1>_<tags>.<ext>` 入库；旧库移到 `_archive/stickers-old-20261025` | `sticker-qq-import.py`、`sticker-import-run.mjs`、`sticker-admin.mjs` |
 | 表情识图打标签/拒收 | `<dsh_im_sticker_tag>词</dsh_im_sticker_tag>` 补标签；`<dsh_im_sticker_reject/>` 删除不合人设的收藏 | `tagSticker/removeSticker`、`#applyStickerVerdict`、`#recentStickers` |
 | 语音 | `<dsh_im_voice>短句</dsh_im_voice>`，最多 3 条连发（条间 250~700ms）；TTS 走 gsv/GPU | `extractMediaIntent`、`voice-synth.mjs`、`gsv-tts.mjs` |
 | 被激将优先语音 | 命中激将词（这也不生气/你急了/敢不敢…）→ prompt 提示优先发语音 | `PROVOKE_PATTERN`、`#process` |
@@ -61,7 +62,7 @@
 | 轻量 preset | `qq-bot`：只保留搜索/提问/压缩；MCP 工具全部隐藏 | `.dsh/profiles/desktop/qq-bot-restrict.mjs`、`cordis.patch.yml` |
 | 每日预算 | 每 bot 3 元/天（估算：回复 0.006、watch 0.004、冒泡 0.006 元/次） | `cost-budget.mjs`、`chargeBudget/isBudgetExhausted` |
 | 推理强度 | 群里默认 low，主人 `/effort` 调整 | `group-reasoning.mjs` |
-| 历史保留 | 群历史 14 天、决策日志 30 天、表情库上限 800 | `group-history-store.mjs`、`decision-log.mjs`、`sticker-library.mjs` |
+| 历史保留 | 群历史 14 天、决策日志 30 天、表情库上限 3000 | `group-history-store.mjs`、`decision-log.mjs`、`sticker-library.mjs` |
 
 ## 5.1 长期记忆（2026-10-24）
 
