@@ -75,16 +75,28 @@ export function jitteredSlotMinutes({ dailyMinutes, dayKey, targetKey, jitterMin
   return dailyMinutes + offset;
 }
 
-/** Pick one template for the slot; `texts` may be { "07:45": [...] } or a list. */
-export function pickProactiveText(texts, slotLabel, random = Math.random) {
+/**
+ * Pick one template for the slot; `texts` may be:
+ * - a list (used for every target),
+ * - { "07:45": [...] } slot pools,
+ * - { group: [...], direct: [...] } per-target-kind pools (2026-10-25：群里对人称用“大家/你们”),
+ * picking kind first, then slot, then default.
+ */
+export function pickProactiveText(texts, slotLabel, random = Math.random, kind = '') {
   if (Array.isArray(texts)) {
     return texts.length ? texts[Math.floor(random() * texts.length)] : '';
   }
   if (texts && typeof texts === 'object') {
-    const pool = Array.isArray(texts[slotLabel]) && texts[slotLabel].length
-      ? texts[slotLabel]
-      : Array.isArray(texts.default) ? texts.default : [];
-    return pool.length ? pool[Math.floor(random() * pool.length)] : '';
+    const candidates = [
+      kind ? texts[kind] : null,
+      texts[slotLabel],
+      texts.default,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate) && candidate.length > 0) {
+        return candidate[Math.floor(random() * candidate.length)];
+      }
+    }
   }
   return '';
 }
@@ -306,7 +318,8 @@ export class QqProactiveScheduler {
           roll: Math.random(),
         });
         if (!decision.fire) continue;
-        const text = pickProactiveText(entry.texts, slotLabel);
+        const kind = targetKey.startsWith('c2c:') ? 'direct' : 'group';
+        const text = pickProactiveText(entry.texts, slotLabel, Math.random, kind);
         if (!text) continue;
         try {
           await this.#send(targetKey, text);

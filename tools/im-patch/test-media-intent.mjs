@@ -20,8 +20,24 @@ function check(label, condition, detail = '') {
 try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
-    appendPromptPart, mergeCoalescedMessages, formatChatDigest,
+    appendPromptPart, mergeCoalescedMessages, formatChatDigest, isNudgeMessage,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
+  const { pickProactiveText } = await import(src('src/channels/qq/qq-proactive.mjs'));
+
+  // 2026-10-25：线程窗口相关纯函数。
+  check('nudge: 你怎么不回蓝莓', isNudgeMessage('你怎么不回蓝莓') === true);
+  check('nudge: 为什么不理人家', isNudgeMessage('为什么不理人家') === true);
+  check('nudge: 普通消息不算', isNudgeMessage('今天吃什么') === false);
+  const proactiveTexts = {
+    group: ['大家早'],
+    direct: ['你早'],
+    default: ['默认'],
+  };
+  check('proactive text picks group pool', pickProactiveText(proactiveTexts, 'default', () => 0, 'group') === '大家早');
+  check('proactive text picks direct pool', pickProactiveText(proactiveTexts, 'default', () => 0, 'direct') === '你早');
+  check('proactive text falls back to default pool',
+    pickProactiveText({ default: ['默认'] }, 'default', () => 0, 'group') === '默认');
+  check('proactive text falls back to list', pickProactiveText(['只有一条'], 'default', () => 0, 'group') === '只有一条');
 
   const merged = mergeCoalescedMessages([
     { messageId: 'm1', message: { messageId: 'm1', content: '第一句', attachments: [{ content_type: 'text/plain' }] } },

@@ -149,6 +149,13 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     skipPromptTalk: true,
     instruction: '',
   }),
+  // 2026-10-25：线程窗口——机器人发言后的一小段时间内，其他人接话/反应优先交给模型判断。
+  threadWindow: Object.freeze({
+    enabled: true,
+    seconds: 120,
+    maxPerSender: 2,
+    nudgeEnabled: true,
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),
