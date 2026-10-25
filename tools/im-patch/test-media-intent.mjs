@@ -21,7 +21,7 @@ try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
     appendPromptPart, mergeCoalescedMessages, formatChatDigest, isNudgeMessage,
-    silenceRecheckAllowed,
+    silenceRecheckAllowed, shouldWarnJoke,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
   const { pickProactiveText } = await import(src('src/channels/qq/qq-proactive.mjs'));
 
@@ -38,6 +38,14 @@ try {
   check('silence recheck expires after 30s',
     silenceRecheckAllowed({ at: silentAt, count: 1 }, silentAt + 31_000) === false);
   check('silence recheck without state is false', silenceRecheckAllowed(null) === false);
+  // 2026-10-25：连续被开玩笑 → 先说明“后面不回了”再短静默。
+  const jokeAt = Date.now();
+  check('joke warn triggers at 2nd addressed message',
+    shouldWarnJoke({ count: 2, at: jokeAt }, jokeAt + 1000) === true);
+  check('joke warn not before threshold',
+    shouldWarnJoke({ count: 1, at: jokeAt }, jokeAt + 1000) === false);
+  check('joke warn expires after window',
+    shouldWarnJoke({ count: 2, at: jokeAt }, jokeAt + 61_000) === false);
   const proactiveTexts = {
     group: ['大家早'],
     direct: ['你早'],
