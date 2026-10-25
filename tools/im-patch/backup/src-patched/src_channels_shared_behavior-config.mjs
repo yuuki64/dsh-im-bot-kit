@@ -164,6 +164,13 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     waitSeconds: 120,
     maxPerDayPerConversation: 2,
   }),
+  // 2026-10-25：被连续开玩笑时——先回一句“后面不回了”，再短时间静默。
+  jokeMute: Object.freeze({
+    enabled: true,
+    windowSeconds: 60,
+    warnAfter: 2,
+    muteSeconds: 180,
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),

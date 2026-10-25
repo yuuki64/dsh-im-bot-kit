@@ -10,16 +10,16 @@
 本机跑的是 `@xmanrui/dsh-im` 5.2.0 + 22 个文件的本地补丁集（引用图片、QQ 语音、表情包、私聊/群聊双开关、群聊接续、人设注入、微信出站标签清理等）。产物 `lib/index.js` 由 `tools/im-patch/build-im.mjs` 重新打包；QQ 行为冻结，维护阶段没有新增 QQ 功能。
 
 <!-- dsh-im-status:begin -->
-<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-25T11:27:02.297Z；数字来自代码清单与实测，不要手改 -->
+<!-- 由 node tools/im-patch/status.mjs --doc 生成于 2026-10-25T12:04:52.567Z；数字来自代码清单与实测，不要手改 -->
 
 | 项 | 实测值 |
 | --- | --- |
 | 上游版本 | @xmanrui/dsh-im 5.2.0（补丁集适配 5.2.0） |
 | 补丁文件数 | 33（由 tools/im-patch/manifest.mjs 生成） |
-| 构建基线 | build · 2026-10-25T09:39:09.876Z（证据来自本机权威目录，不在本副本内） |
-| 构建输入 | 348 个源文件 · sha256 f992b29c80d95136… |
-| 产物 bundle | 9,196,356 B · sha256 7d10ba7c0ec13a77… |
-| 核对结论 | `PATCH_DRIFT`（`node tools/im-patch/verify-build.mjs`） |
+| 构建基线 | build · 2026-10-25T12:03:41.806Z（证据来自本机权威目录，不在本副本内） |
+| 构建输入 | 348 个源文件 · sha256 7303cc93e0b32e7e… |
+| 产物 bundle | 9,202,648 B · sha256 8320622f4aa45b26… |
+| 核对结论 | `RUNTIME_NOT_RESTARTED`（`node tools/im-patch/verify-build.mjs`） |
 | 运行实例 | 尚未确认 |
 | 通道开关 | 私聊=开 群聊=开 |
 | 最后核验 | 2026-10-23 |

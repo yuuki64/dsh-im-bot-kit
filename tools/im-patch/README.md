@@ -1143,3 +1143,13 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **视频回复“AI 味”**：异步视频回答 prompt 增加“像群友随口吐槽/接梗，不要总结、不要逐条解说、不要写总结句”，杜绝「这分工真实得有点过分了」式播报。
 - **测试**：`test-media-intent.mjs` 新增 ask 标签 3 项。
 
+### 18.31 被点名不能无视 + 连续开玩笑的“预告式静默”（2026-10-25 第二十八轮）
+
+- **案例**：群友 @yuri「快叫你妈妈去吃饭」→ yuri 识别为 reply（进了回复队列），但模型选择静默；随后群友 @椎名「椎名你也是」，椎名才回。用户反馈：玩笑也要接一句，直接无视不礼貌；如果短时间一直开涮，可以先说“后面不回了”，再真的静默一小会儿。
+- **规则 1（点名礼貌）**：被 @/点名时必须回一句，哪怕是玩笑/烂梗，也用短吐槽/反问接住；只有 ①聊提示词/设定 ②明确辱骂或让你闭嘴 ③系统消息 才允许静默。
+- **规则 2（预告式静默）**：同一人 **60 秒内连续 2 次**点名（非主人）→ 这一轮提示模型用一句自然的话说明“后面先不回了”，发送后进入 **180 秒静默**（期间该会话非主人消息静默跳过，原因 `muted-after-warning`）；主人说话立即解除静默。
+- **实现**：`#addressedJoke` / `#mutedConversations` / `#noteAddressedMessage` / `#muteConversation` / `#isMuted`；纯函数 `shouldWarnJoke()`。
+- **配置**：`behavior.json → jokeMute {enabled, windowSeconds:60, warnAfter:2, muteSeconds:180}`（已写入）。
+- **测试**：`test-media-intent.mjs` 新增 3 项（阈值触发/阈值前不触发/窗口过期）。
+- 本批改动已 apply（构建更新），需重启一次 DSH 生效。
+

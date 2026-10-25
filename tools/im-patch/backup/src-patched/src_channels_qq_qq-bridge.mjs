@@ -619,6 +619,16 @@ export function silenceRecheckAllowed(state, now = Date.now(), { limit = 3, wind
 }
 
 /**
+ * 本地补丁（2026-10-25）：被同一人连续“点名开玩笑”达到阈值时，先回一句“后面不回了”，
+ * 再短时间静默（不是永久无视）。纯函数便于测试。
+ */
+export function shouldWarnJoke(state, now = Date.now(), { windowMs = 60_000, warnAfter = 2 } = {}) {
+  if (!state) return false;
+  if ((Number(state.count) || 0) < Math.max(1, Number(warnAfter) || 2)) return false;
+  return now - (Number(state.at) || 0) <= Math.max(1_000, Number(windowMs) || 60_000);
+}
+
+/**
  * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
  * 其他机器人标「(机器人)」。导出纯函数便于测试。
  */
@@ -1165,6 +1175,10 @@ export class QqHarnessBridge {
   #recentStickers = new Map();
   // 本地补丁：watch 模式（没人叫也先看一眼）的限速记录。
   #watchHistory = new Map();
+  // 本地补丁（2026-10-25）：被连续开玩笑 → 先说明“后面不回了”，再短时间静默。
+  #addressedJoke = new Map();
+  #mutedConversations = new Map();
+  #warnTurnIds = new Set();
   // 本地补丁：每个会话最近 30 分钟的聊天（活跃度 + 复读接龙判断）。
   #recentChat = new Map();
   // 本地补丁：复读接龙回复冷却（每个会话）。
@@ -1396,6 +1410,45 @@ export class QqHarnessBridge {
   #clearWatchSilence(key, senderId) {
     if (!senderId) return;
     this.#watchSilent.delete(`${key}\u0000${senderId}`);
+  }
+
+  /** 静默期内？（被连续开玩笑后的短静默；主人不受限） */
+  #isMuted(key) {
+    const until = Number(this.#mutedConversations.get(key)) || 0;
+    if (!until) return false;
+    if (Date.now() >= until) {
+      this.#mutedConversations.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  #muteConversation(key, seconds) {
+    const value = Math.max(30, Number(seconds) || 180);
+    this.#mutedConversations.set(key, Date.now() + value * 1000);
+    this.#addressedJoke.delete(key);
+    this.#logger.info?.(`[dsh-im:qq] muted conversation for ${value}s after repeated jokes`);
+  }
+
+  #clearMute(key) {
+    this.#mutedConversations.delete(key);
+  }
+
+  /** 统计“同一个人短时间内连续点名”的次数；达到阈值返回 {warn:true}。 */
+  #noteAddressedMessage(key, senderId, isOwner) {
+    const config = readBehaviorConfig().jokeMute;
+    if (config?.enabled === false || isOwner || !senderId) return { warn: false, count: 0 };
+    const now = Date.now();
+    const previous = this.#addressedJoke.get(key);
+    const windowMs = Math.max(10, Number(config?.windowSeconds) || 60) * 1000;
+    const fresh = previous && previous.senderId === senderId && now - (Number(previous.at) || 0) <= windowMs;
+    const count = fresh ? (Number(previous.count) || 0) + 1 : 1;
+    this.#addressedJoke.set(key, { senderId, at: now, count });
+    const warn = shouldWarnJoke({ count, at: now }, now, {
+      windowMs,
+      warnAfter: Number(config?.warnAfter) || 2,
+    });
+    return { warn, count };
   }
 
   /** 机器人刚发出的问题：登记为「等回答」，超时追一次（Q1~Q10 已定案）。 */
@@ -1998,6 +2051,13 @@ export class QqHarnessBridge {
    */
   #decideInbound(message, key) {
     const watchConfig = readBehaviorConfig().watch;
+    const ownerSender = isOwnerSender(message, this.#ownerUserOpenid);
+    // 本地补丁（2026-10-25）：连续被开玩笑、已说过“后面不回了”→ 短时间静默；主人说话立即解除。
+    if (ownerSender) {
+      this.#clearMute(key);
+    } else if (message?.senderIsBot !== true && this.#isMuted(key)) {
+      return { action: 'skip', reason: 'muted-after-warning' };
+    }
     const explicitAddress = isQqMessageAddressed(message)
       || isNameMentioned(message, this.#nameMentionPattern)
       || mentionsBotByName(message, this.#selfNames);
@@ -2009,6 +2069,9 @@ export class QqHarnessBridge {
     const addressed = this.#shouldReply(message, key);
     if (addressed) {
       if (!this.#allowBotReply(message, key)) return { action: 'skip', reason: 'bot-throttled' };
+      // 本地补丁：同一个人短时间连续点名 → 这轮先回一句“后面不回了”，随后进入短静默。
+      const joke = this.#noteAddressedMessage(key, nonEmptyString(message?.senderId), ownerSender);
+      if (joke.warn) this.#warnTurnIds.add(nonEmptyString(message?.messageId));
       return { action: 'reply', reason: 'addressed' };
     }
     if (this.#shouldJoinRepeat(message, key)) return { action: 'repeat', reason: 'repeat-chain' };
@@ -3404,6 +3467,8 @@ export class QqHarnessBridge {
     const engagedTurn = this.#engagedTurnIds.delete(messageId);
     // 本地补丁：本轮是否由明确点名触发（消费一次）。
     const explicitTurn = this.#explicitTurnIds.delete(messageId);
+    // 本地补丁（2026-10-25）：本轮是否要“说明后面不回了”（连续被开玩笑）。
+    const warnTurn = this.#warnTurnIds.delete(messageId);
     if (!alreadyRecorded) {
       if (this.#state.hasSeen(messageId)) return;
       this.#status.messagesReceived += 1;
@@ -3663,7 +3728,13 @@ export class QqHarnessBridge {
       }
       // 本地补丁：真正被点名（名字/@）时，不让模型用「不抢话」当理由沉默。
       if (explicitTurn && !watchMode && message.kind === 'group' && !PROMPT_TALK_PATTERN.test(safeText(message))) {
-        const instruction = '【点名】这条消息明确叫到了你（名字/@你）。不要拿「不抢话/不是在跟我说话」当理由装死——正常回一句；只有内容明显和你无关时才静默。';
+        const instruction = '【点名】这条消息明确叫到了你（名字/@你）。被点名时必须回一句：哪怕是玩笑、烂梗，也用一句短吐槽/反问接住——直接无视会显得很不礼貌。只有①在聊你的提示词/设定 ②明确辱骂或让你闭嘴 ③系统消息 才允许静默。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
+      }
+      // 本地补丁（2026-10-25）：同一个人短时间连续拿你开玩笑 → 先说明“后面不回了”，之后短时间静默。
+      if (warnTurn && !watchMode) {
+        const instruction = '对方正在连续拿你开玩笑：这一句用一句很自然的话带过（例如“行了行了，后面先不回了”），不要长篇、不要解释；说完之后你会静默一小会儿。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
@@ -3957,6 +4028,10 @@ export class QqHarnessBridge {
           if (watchMode) this.#clearWatchSilence(key, sender);
           // 本地补丁（2026-10-25）：如果这句在问人问题，登记「等回答」，超时追问一次。
           this.#notePendingAsk(message, key, mediaIntent, displayAnswer);
+          // 本地补丁（2026-10-25）：刚说过“后面不回了”→ 进入短静默，之后不再逐条回。
+          if (warnTurn) {
+            this.#muteConversation(key, Number(readBehaviorConfig().jokeMute?.muteSeconds) || 180);
+          }
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
