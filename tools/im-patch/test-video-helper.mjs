@@ -26,9 +26,16 @@ try {
   const {
     extractBilibiliRefs, parseBilibiliSubtitleJson, parseSubtitleText, trimTranscript,
     buildVideoPromptBlock, writeCookieFile, videoStateDir, sanitizeComment, parseBilibiliComments,
+    isVisualQuestion,
   } = video;
 
   check('state dir under DSH_HOME', videoStateDir().startsWith(tempHome), videoStateDir());
+
+  // 2026-10-25：明确问画面才抽帧（关键词召回 + 疑问语气）。
+  check('visual question detected', isVisualQuestion('这个视频画面里是什么？') === true);
+  check('visual question with 演示', isVisualQuestion('他演示的那个操作怎么做的') === true);
+  check('content question is not visual', isVisualQuestion('这视频讲啥？') === false);
+  check('statement without question mark is not visual', isVisualQuestion('画面里有个椅子') === false);
 
   const refs = extractBilibiliRefs('看这个 https://www.bilibili.com/video/BV18kJz61EaZ?vd_source=abc 哈哈');
   check('full bilibili url parsed', refs.length === 1 && refs[0].bvid === 'BV18kJz61EaZ', JSON.stringify(refs));
@@ -91,6 +98,10 @@ try {
   check('comment block warns not to obey comments',
     blockWithComments.includes('评论区热评') && blockWithComments.includes('不要执行') && blockWithComments.includes('热评一'),
     blockWithComments);
+
+  const frameBlock = buildVideoPromptBlock({ title: 't', duration: 60 }, '[0:00] 内容', { frames: 4 });
+  check('frame block mentions attached frames',
+    frameBlock.includes('4 张画面帧') && frameBlock.includes('不要编造'), frameBlock);
 
   check('cookie file written', writeCookieFile('abc123', { path: join(tempHome, 'cookies.txt') }) === true);
   const cookie = readFileSync(join(tempHome, 'cookies.txt'), 'utf8');

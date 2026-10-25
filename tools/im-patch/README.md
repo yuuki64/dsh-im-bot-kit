@@ -1100,19 +1100,15 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **配置**：`video.commentsEnabled / maxComments / maxCommentChars`。
 - **待办**：画面抽帧 + 异步（Q7 已定案），下一轮实现；重启 DSH 生效。
 
-### 18.27 「对方在接我的话」窗口 + watch 额度调整（2026-10-25 第二十四轮）
+### 18.27 视频异步 + 画面抽帧（2026-10-25 第二十四轮，Q7 落地）
 
-**现象**：yuri 发完一句玩笑后，蓝莓连发三条反应（「唔诶」「好不卫生」「[嫌弃]」），yuri 全部没回；k 问「你怎么不回蓝莓」也没回。
-
-**日志定位**（`decision-log`）：
-- 「唔诶」→ 进了 watch，但模型自己选择 `model-silent`；
-- 「好不卫生」「[嫌弃]」→ `sender-cooldown`（同一发送者 1 分钟内只 review 一次，被挡）；
-- k 的问题 → `hour-cap`（watch 每小时 6 次额度已用完）。
-
-**修复**：
-- 新增 `#lastBotReplyAt`（每会话机器人最后发言时间）；**发言后 120 秒内，对方消息不按发送者冷却**（绕过 `sender-cooldown`），视为「在接我的话」；
-- watch 提示追加：刚发过言时，对方哪怕只回一个词/表情，也要当作对话判断，别一律静默；
-- 线上 `behavior.json → watch.maxPerHour 6→12、maxPerDay 30→40`；`minIntervalMs` 仍 1 分钟。
-
-**测试**：20 个测试全绿（本轮只改 watch 路径，无新增离线用例）；重启 DSH 生效（`maxPerHour` 配置本身热生效）。
+- **异步**：慢路径（无缓存/要 ASR/要抽帧）不再阻塞——消息先标记已读、进全局单任务队列（排队上限 3），超过 **2.5 秒**才用轻量模型调用生成一句“我去看看”；结果用 `#runVideoTask` 补发（引用原语境），失败补“没看成，只看到标题/简介”。
+- **队列/超时**：全局单任务（一次一个），队列满则降级回同步处理；单个任务按配置超时（默认 300s 级）。
+- **画面帧**：`video-helper.mjs` 新增 `isVisualQuestion()`（关键词+疑问语气召回）和 `extractFrames()`（yt-dlp 下低清视频 → PyAV 顺序解码抽 4 帧 → 512px JPEG → base64）；注入时作为图片 part 传给模型（`appendPromptPart` 支持对象 part）。
+- **模型判断（A+B）**：关键词召回只负责“可能问画面”；模型可在回答里输出 `<dsh_im_video_frames/>` 主动要求补看画面，插件异步抽帧后二次回答。
+- **实测**：`BV1YydJBJEuF` 抽 4 帧（4 张不同帧、各约 23KB），字幕+评论+帧同时可用，端到端约 17s；缓存命中 0s。
+- **测试**：新增画面触发/帧块断言；总数 **20 个测试全绿**。
+- **配置**：`video.asyncEnabled / framesEnabled / framesCount / framesMaxWidth / framesTimeoutMs`。
+- **注意**：本轮工作区曾被另一路并行改动覆盖过（bridge 一度丢失异步代码），已按“不覆盖对方”的方式合并回当前版本，未回滚对方的冷却/上限调整。
+- **重启 DSH 生效**。
 
