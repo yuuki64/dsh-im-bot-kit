@@ -117,7 +117,7 @@ import {
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
 import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
-import { buildBilibiliContext, extractBilibiliRefs } from '../shared/video-helper.mjs';
+import { buildBilibiliContext, extractBilibiliRefs, isVisualQuestion, peekCachedVideo } from '../shared/video-helper.mjs';
 import {
   captureFacts, clearMemory, digestDoneToday, forgetMemory, listHabits, listMemoryGroups, loadMemory,
   markDigestDone, memoryStats, pruneMemory, recentFactTexts, recordHabitObservation,
@@ -565,6 +565,12 @@ const WHY_COMMAND_PATTERN = /^\/(?:why|为什么)(?:\s+(\d{1,2}))?$/iu;
  * 追加系统提示时必须分别处理，否则数组会被模板字符串拼成 "[object Object]".
  */
 export function appendPromptPart(content, part) {
+  // 图片 part 是对象；必须原样插入，不能被模板字符串拼接。
+  if (part && typeof part === 'object' && !Array.isArray(part)) {
+    if (Array.isArray(content)) return [...content, part];
+    if (typeof content === 'string') return [{ type: 'text', text: content }, part];
+    return [part];
+  }
   if (Array.isArray(content)) return [...content, { type: 'text', text: part }];
   if (typeof content === 'string') return `${content}${part}`;
   return content;
@@ -1134,8 +1140,13 @@ export class QqHarnessBridge {
   #engagementMisses = new Map();
   // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
   #engagedTurnIds = new Set();
+  // 本地补丁（2026-10-25）：B 站视频异步任务——全局单任务，排队上限 3。
+  #videoQueue = [];
+  #videoTaskRunning = false;
   // 本地补丁：本轮是否由明确点名触发（用于区分「点名」与「接话窗口」提示）。
   #explicitTurnIds = new Set();
+  // 本地补丁（2026-10-25）：每个会话机器人自己最后一次发言时间（「对方在接我的话」窗口）。
+  #lastBotReplyAt = new Map();
   // 本地补丁：同一人连发多条时的合并缓冲（每会话一个）。
   #coalescePending = new Map();
   // Non-owner spam guard: per (conversation, sender) recent lines.
@@ -1610,8 +1621,9 @@ export class QqHarnessBridge {
     const state = this.#watchHistory.get(key) ?? { lastAtBySender: {}, hits: [] };
     if (!state.lastAtBySender || typeof state.lastAtBySender !== 'object') state.lastAtBySender = {};
     const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
-    // 引用消息、主人消息不按发送者冷却（否则同一个人 1 分钟内再发一句就被挡掉）。
-    const bypassSenderCooldown = quoteRef || ownerMessage;
+    // 本地补丁：引用消息、主人消息、以及「刚说完话 2 分钟内对方的接话」不按发送者冷却。
+    const recentBotReply = now - (Number(this.#lastBotReplyAt.get(key)) || 0) <= 120_000;
+    const bypassSenderCooldown = quoteRef || ownerMessage || recentBotReply;
     if (!bypassSenderCooldown
       && now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) {
       return deny('sender-cooldown');
@@ -2980,6 +2992,127 @@ export class QqHarnessBridge {
     }
   }
 
+  /** 本地补丁（2026-10-25）：把慢路径视频任务丢进队列；队列满返回 false（调用方降级同步处理）。 */
+  #startVideoTask(job) {
+    if (this.#videoQueue.length >= 3) return false;
+    this.#videoQueue.push(job);
+    this.#pumpVideoQueue();
+    return true;
+  }
+
+  #pumpVideoQueue() {
+    if (this.#videoTaskRunning) return;
+    const job = this.#videoQueue.shift();
+    if (!job) return;
+    this.#videoTaskRunning = true;
+    void this.#runVideoTask(job).finally(() => {
+      this.#videoTaskRunning = false;
+      this.#pumpVideoQueue();
+    });
+  }
+
+  /** 等待超过 2.5 秒才生成一句“我去看看”（轻量独立调用，不读完整上下文）。 */
+  async #sendVideoAck(message, key) {
+    if (this.#signal?.aborted) return;
+    try {
+      const { answer } = await askInWorkspaceSession({
+        harness: this.#harness,
+        state: this.#state,
+        key,
+        text: '用一句很短的话告诉对方你去看视频了（按你的人设，只输出这一句，不要解释、不要用 Markdown）。',
+        sourceGuidance: applyPersona(undefined, { botId: this.#botId }),
+        timeoutMs: Math.min(this.#replyTimeoutMs, 30_000),
+        signal: this.#signal,
+        askOptions: {
+          timeoutMs: Math.min(this.#replyTimeoutMs, 30_000),
+          signal: this.#signal,
+          control: { owner: this, key },
+          progressMode: 'final',
+          finalAnswerOnly: true,
+        },
+      });
+      const text = extractMediaIntent(answer).text.trim();
+      if (text) await this.#bot.sendText(message.replyTarget, text);
+      chargeBudget(this.#botId, readBehaviorConfig().budget?.replyCny);
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] video ack failed:', error?.message ?? error);
+    }
+  }
+
+  /** 异步任务：取视频内容（含可选画面帧）→ 模型回答 → 补发结果。 */
+  async #runVideoTask({ message, messageId, key, videoText, includeFrames }) {
+    const started = Date.now();
+    let ackSent = false;
+    const ackTimer = setTimeout(() => {
+      ackSent = true;
+      void this.#sendVideoAck(message, key);
+    }, 2500);
+    ackTimer.unref?.();
+    let result = null;
+    try {
+      result = await buildBilibiliContext(videoText, {
+        config: readBehaviorConfig().video,
+        includeFrames: includeFrames === true,
+      });
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] async video context failed:', error?.message ?? error);
+    } finally {
+      clearTimeout(ackTimer);
+    }
+    try {
+      if (!result?.block) {
+        await this.#bot.sendText(message.replyTarget, ackSent
+          ? '没看成，只看到标题/简介。'
+          : '没看成，只看到标题/简介。').catch(() => {});
+        await this.#state.markSeen(messageId).catch(() => {});
+        this.#logOutcome(message, key, { action: 'async-result', reason: 'video-failed' });
+        return;
+      }
+      const promptText = `${safeText(message)}\n\n${result.block}\n\n[系统提示] 根据上面的视频内容回答对方，1~2 句、短一点；不要提系统提示，也不要编造画面之外的信息。`;
+      const contentParts = [{ type: 'text', text: promptText }];
+      for (const frame of result.frames ?? []) contentParts.push(frame);
+      const { answer } = await askInWorkspaceSession({
+        harness: this.#harness,
+        state: this.#state,
+        key,
+        text: promptText,
+        content: contentParts,
+        sourceGuidance: applyPersona(undefined, { botId: this.#botId }),
+        timeoutMs: this.#replyTimeoutMs,
+        signal: this.#signal,
+        askOptions: {
+          timeoutMs: this.#replyTimeoutMs,
+          signal: this.#signal,
+          control: { owner: this, key },
+          progressMode: 'final',
+          finalAnswerOnly: true,
+        },
+      });
+      chargeBudget(this.#botId, readBehaviorConfig().budget?.replyCny);
+      const intent = extractMediaIntent(answer);
+      const display = intent.text || String(answer ?? '').trim();
+      if (!display) return;
+      const chunking = readBehaviorConfig().replyChunking;
+      const segments = chunking?.enabled
+        ? splitChatSegments(display, {
+          maxChars: chunking.maxChars,
+          maxSegments: chunking.maxSegments,
+          longSentenceLimit: chunking.longSentenceLimit,
+        })
+        : null;
+      await sendMarkdownReply(this.#bot, message.replyTarget, display, {
+        logger: this.#logger,
+        ...(segments ? { segments, segmentGap: { minMs: chunking.gapMinMs, maxMs: chunking.gapMaxMs } } : {}),
+      });
+      await this.#state.markSeen(messageId).catch(() => {});
+      this.#logOutcome(message, key, { action: 'async-result', reason: `video-${result.source}` });
+      this.#logger.info?.(`[dsh-im:qq] async video reply sent (${result.source}, ${((Date.now() - started) / 1000).toFixed(1)}s)`);
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] async video reply failed:', error?.message ?? error);
+      await this.#bot.sendText(message.replyTarget, '看完了，但没整理好，等会儿再问我？').catch(() => {});
+    }
+  }
+
   async #process(message, key, {
     alreadyRecorded = false,
     preparedMessage,
@@ -3130,20 +3263,34 @@ export class QqHarnessBridge {
       }
       // 本地补丁：B 站链接——字幕优先 / 本地 ASR 兜底，把视频内容注入 prompt。
       // 群里所有人都可用（用户确认：暂时只有 B 站链接例外，后续可加白名单）。
+      // 2026-10-25：慢路径异步——先确认收到，结果再补发（见 #runVideoTask）。
       {
         const videoConfig = readBehaviorConfig().video;
         if (videoConfig?.enabled !== false) {
           const videoSourceText = `${message?.content ?? ''}\n${message?.raw?.content ?? ''}`;
           if (extractBilibiliRefs(videoSourceText).length > 0) {
-            try {
-              const video = await buildBilibiliContext(videoSourceText, { config: videoConfig });
-              if (video?.block) {
-                this.#logger.info?.(`[dsh-im:qq] bilibili video context ready (${video.source})`);
-                text = `${text}${video.block}`;
-                content = appendPromptPart(content, video.block);
+            const cached = peekCachedVideo(videoSourceText);
+            const visual = isVisualQuestion(videoSourceText, videoConfig.visualKeywords);
+            const canServeCache = cached && !visual;
+            if (canServeCache) {
+              text = `${text}${cached.block}`;
+              content = appendPromptPart(content, cached.block);
+            } else if (videoConfig.asyncEnabled !== false
+              && this.#startVideoTask({ message, messageId, key, videoText: videoSourceText, includeFrames: visual })) {
+              await this.#state.markSeen(messageId).catch(() => {});
+              return;
+            } else {
+              try {
+                const video = await buildBilibiliContext(videoSourceText, { config: videoConfig, includeFrames: visual });
+                if (video?.block) {
+                  this.#logger.info?.(`[dsh-im:qq] bilibili video context ready (${video.source})`);
+                  text = `${text}${video.block}`;
+                  content = appendPromptPart(content, video.block);
+                  for (const frame of video.frames ?? []) content = appendPromptPart(content, frame);
+                }
+              } catch (error) {
+                this.#logger.warn?.('[dsh-im:qq] bilibili video context failed:', error?.message ?? error);
               }
-            } catch (error) {
-              this.#logger.warn?.('[dsh-im:qq] bilibili video context failed:', error?.message ?? error);
             }
           }
         }
@@ -3203,7 +3350,12 @@ export class QqHarnessBridge {
         const mediaNote = (hasQqImageAttachments(message) || hasQqFileAttachments(message))
           ? '\n这是图片/文件消息：除非有人明确问你，否则不要描述、解释、复读图里/文件里的内容（尤其不要像解说员一样逐条讲解）；最多一句很短的自然反应，或者直接静默。'
           : '';
-        const instruction = `${baseInstruction}${ownerExtra}${mediaNote}`;
+        // 本地补丁：刚发完话 2 分钟内，对方很可能是在接自己的话——即使很短也该当对话判断。
+        const reactingToBot = Date.now() - (Number(this.#lastBotReplyAt.get(key)) || 0) <= 120_000;
+        const reactionNote = reactingToBot
+          ? '\n注意：你刚刚在这个会话里发过言。如果对方这条像是在接你的话（哪怕只有一个词、一个表情、一句吐槽），就当作在跟你说话，可以自然接一句；只有明显是在跟别人说才静默。'
+          : '';
+        const instruction = `${baseInstruction}${ownerExtra}${mediaNote}${reactionNote}`;
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
@@ -3517,6 +3669,7 @@ export class QqHarnessBridge {
           // 同时记进最近群聊，让下一轮能看见「刚才是我说的」。
           this.#rememberBotText(key, displayAnswer);
           if (message.kind === 'group') this.#rememberOwnChat(key, displayAnswer);
+          this.#lastBotReplyAt.set(key, Date.now());
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
