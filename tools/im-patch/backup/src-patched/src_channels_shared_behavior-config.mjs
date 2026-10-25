@@ -59,6 +59,12 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     cacheDays: 7,
     commentsEnabled: true,
     maxComments: 6,
+    // 2026-10-25：异步 + 画面抽帧（关键词召回 + 模型判断；明确问画面才抽帧）。
+    asyncEnabled: true,
+    framesEnabled: true,
+    framesCount: 4,
+    framesMaxWidth: 512,
+    framesTimeoutMs: 240000,
     downloadTimeoutMs: 180000,
     subtitleTimeoutMs: 120000,
     asrTimeoutMs: 600000,
