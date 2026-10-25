@@ -35,6 +35,7 @@
 - 无 cookie、无字幕的 40 秒视频：元数据 0.2s，ASR 兜底约 14.7s（medium + CUDA），转写成功；二次访问缓存 0.0s。
 - **字幕路径已验证**（2026-10-25，小号 cookie）：`BV1YydJBJEuF` 能取到 `ai-zh` 字幕，插件端到端返回 `source=subtitle`，转写内容准确、走缓存 0.0s。
 - 字幕获取：cookies 文件只存本机 `~/.dsh/integrations/dsh-im/video/cookies.txt`（已用主人的**小号** SESSDATA，主号未使用）；不进 git、不回显、不外发。
+- **VAD 坑（2026-10-25 修复）**：faster-whisper 默认 `vad_filter=True` 会把带 BGM/重复段的音频当静音，导致转写只到前 ~10 秒（群里那次只到 0:09）。已改为 `vad_filter=False`，同一视频重测覆盖 0:00–0:36，并修正“41 秒显示成 1 分 41 秒”的时长格式化 bug。
 - 仍待首轮真机：重启后在群里发有字幕的视频，确认回复内容与字幕一致。
 
 ## 安全说明（SESSDATA）
