@@ -1151,5 +1151,6 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **实现**：`#addressedJoke` / `#mutedConversations` / `#noteAddressedMessage` / `#muteConversation` / `#isMuted`；纯函数 `shouldWarnJoke()`。
 - **配置**：`behavior.json → jokeMute {enabled, windowSeconds:60, warnAfter:2, muteSeconds:180}`（已写入）。
 - **测试**：`test-media-intent.mjs` 新增 3 项（阈值触发/阈值前不触发/窗口过期）。
+- **2026-10-25 追加（用户要求）**：**不写死“后面不回了”这类固定句式**——阈值那一轮由机器人自己决定怎么带过（吐槽/反问/直接沉默都可以），只是之后照样短静默；阈值轮若模型选择沉默，也会进入静默，避免连续刷屏。
 - 本批改动已 apply（构建更新），需重启一次 DSH 生效。
 

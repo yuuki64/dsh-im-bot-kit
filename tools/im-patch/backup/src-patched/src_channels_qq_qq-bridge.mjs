@@ -3732,9 +3732,9 @@ export class QqHarnessBridge {
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
-      // 本地补丁（2026-10-25）：同一个人短时间连续拿你开玩笑 → 先说明“后面不回了”，之后短时间静默。
+      // 本地补丁（2026-10-25）：同一个人短时间连续拿你开玩笑 → 由机器人自己决定怎么带过；之后短时间静默。
       if (warnTurn && !watchMode) {
-        const instruction = '对方正在连续拿你开玩笑：这一句用一句很自然的话带过（例如“行了行了，后面先不回了”），不要长篇、不要解释；说完之后你会静默一小会儿。';
+        const instruction = '对方正在连续拿你开玩笑。这一句怎么处理由你自己判断：可以吐槽、反问、用你自己的方式带过，也可以觉得没必要接就直接 <dsh_im_silent/>。不要用固定句式、不要长篇、不要解释；之后你会静默一小会儿。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
@@ -3885,6 +3885,7 @@ export class QqHarnessBridge {
         }
         if (watchMode) this.#noteThreadSilence(key);
         if (watchMode) this.#noteWatchSilence(key, sender);
+        if (warnTurn) this.#muteConversation(key, Number(readBehaviorConfig().jokeMute?.muteSeconds) || 180);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent', engagedTurn });
         return;
       }
@@ -3901,6 +3902,7 @@ export class QqHarnessBridge {
         }
         if (watchMode) this.#noteThreadSilence(key);
         if (watchMode) this.#noteWatchSilence(key, sender);
+        if (warnTurn) this.#muteConversation(key, Number(readBehaviorConfig().jokeMute?.muteSeconds) || 180);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent-tool', engagedTurn });
         return;
       }
