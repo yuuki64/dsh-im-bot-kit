@@ -587,6 +587,14 @@ export function isClosingMessage(text) {
   return CLOSING_PATTERN.test(String(text ?? '').trim());
 }
 
+// 本地补丁（2026-10-25）：有人提醒「你怎么不回 / 为什么不理」——这是漏回信号，应触发一次补偿判断。
+const NUDGE_PATTERN = /(?:怎么|为什么|咋|为啥).{0,10}(?:不回|不理|没回|不回答|不吱声)|(?:不回|不理|没回|不回答).{0,8}(?:人家|别人|他|她|蓝莓|yuri|椎名)/iu;
+
+/** 是否是「你怎么不回 X」这类提醒（导出便于测试）。 */
+export function isNudgeMessage(text) {
+  return NUDGE_PATTERN.test(String(text ?? '').trim());
+}
+
 /**
  * 本地补丁（2026-10-24）：把最近群聊压成上下文块；机器人自己的话显示为「你」，
  * 其他机器人标「(机器人)」。导出纯函数便于测试。
@@ -1142,6 +1150,8 @@ export class QqHarnessBridge {
   #botTexts = new Map();
   // 本地补丁：接话窗口里「连续无关」计数（模型沉默几次后退出窗口）。
   #engagementMisses = new Map();
+  // 本地补丁（2026-10-25）：线程窗口——机器人发言后的一小段时间内，其他人接话优先判断。
+  #threadWindows = new Map();
   // 本地补丁：本轮是否由「接话窗口」续聊触发（用于追加轻量判断提示）。
   #engagedTurnIds = new Set();
   // 本地补丁（2026-10-25）：B 站视频异步任务——全局单任务，排队上限 3。
@@ -1276,6 +1286,70 @@ export class QqHarnessBridge {
     }
     this.#engagementMisses.set(mapKey, misses);
     return false;
+  }
+
+  /** 当前生效的线程窗口（过期自动清理）。 */
+  #threadWindow(key) {
+    const state = this.#threadWindows.get(key);
+    if (!state) return null;
+    if (Date.now() > state.until) {
+      this.#threadWindows.delete(key);
+      return null;
+    }
+    return state;
+  }
+
+  /** 机器人刚在群里发过言 → 开一个线程窗口（其他人接话/反应会被优先判断）。 */
+  #openThreadWindow(key) {
+    const config = readBehaviorConfig().threadWindow;
+    if (config?.enabled === false) return;
+    const seconds = Math.max(30, Number(config?.seconds) || 120);
+    const now = Date.now();
+    const state = this.#threadWindows.get(key) ?? { until: 0, triggers: new Map() };
+    state.until = now + seconds * 1000;
+    state.openedAt = now;
+    if (!(state.triggers instanceof Map)) state.triggers = new Map();
+    this.#threadWindows.set(key, state);
+    while (this.#threadWindows.size > 32) {
+      this.#threadWindows.delete(this.#threadWindows.keys().next().value);
+    }
+  }
+
+  /** 线程窗口里每人最多触发 maxPerSender 次判断，防止一个人连续刷屏。 */
+  #threadTriggerAllowed(key, senderId) {
+    const state = this.#threadWindow(key);
+    if (!state) return false;
+    const limit = Math.max(1, Number(readBehaviorConfig().threadWindow?.maxPerSender) || 2);
+    return (Number(state.triggers.get(senderId)) || 0) < limit;
+  }
+
+  #noteThreadTrigger(key, senderId) {
+    const state = this.#threadWindow(key);
+    if (!state) return;
+    state.triggers.set(senderId, (Number(state.triggers.get(senderId)) || 0) + 1);
+  }
+
+  #closeThreadWindow(key) {
+    this.#threadWindows.delete(key);
+  }
+
+  /** 线程窗口内模型连续沉默 2 次 → 退出窗口（Q7 结束条件之一）。 */
+  #noteThreadSilence(key) {
+    const state = this.#threadWindow(key);
+    if (!state) return;
+    state.silences = (Number(state.silences) || 0) + 1;
+    if (state.silences >= 2) {
+      this.#closeThreadWindow(key);
+      this.#logger.info?.('[dsh-im:qq] thread window closed after repeated silence');
+    }
+  }
+
+  /** 线程窗口内成功回了一句 → 清零沉默计数。 */
+  #noteThreadReply(key) {
+    const state = this.#threadWindow(key);
+    if (!state) return;
+    state.silences = 0;
+    state.until = Date.now() + Math.max(30, Number(readBehaviorConfig().threadWindow?.seconds) || 120) * 1000;
   }
 
   /** Warm the voice sidecar so the first voice reply is not a cold start. */
@@ -1521,13 +1595,17 @@ export class QqHarnessBridge {
   /** 本地补丁：把机器人主动发出的话记进最近群聊（AI 冒泡等运行时代发场景用）。 */
   noteOwnMessage(key, text) {
     this.#rememberOwnChat(key, text);
+    this.#openThreadWindow(key);
   }
 
   async generateProactiveBubble(key, { quietMinutes = 15 } = {}) {
     // 预算用尽时不再主动冒泡（只保留点名/引用/复读回复）。
     const budget = readBehaviorConfig().budget;
     if (isBudgetExhausted(this.#botId, budget?.dailyLimitCny)) return null;
-    const prompt = `【主动发言机会】这个会话已经安静了大约 ${quietMinutes} 分钟。你可以选择主动说一句话，也可以不说。要求：像平时一样短（1~2 句、≤40 字），结合你们之前的聊天自然开口；不要提“主动机会/系统提示/冒泡/我来看看”这类词，不要用模板句式；觉得没必要就只输出 <dsh_im_silent/>。`;
+    const groupNote = key.startsWith('group:')
+      ? '这是群聊：人称用“大家/你们”，不要只对某一个人说，也不要@任何人。'
+      : '';
+    const prompt = `【主动发言机会】这个会话已经安静了大约 ${quietMinutes} 分钟。你可以选择主动说一句话，也可以不说。要求：像平时一样短（1~2 句、≤40 字），结合你们之前的聊天自然开口；不要提“主动机会/系统提示/冒泡/我来看看”这类词，不要用模板句式；觉得没必要就只输出 <dsh_im_silent/>。${groupNote}`;
     try {
       const { answer } = await askInWorkspaceSession({
         harness: this.#harness,
@@ -1559,7 +1637,7 @@ export class QqHarnessBridge {
    * 由 AI 自己决定接不接（不需要就在回复里只输出 <dsh_im_silent/>）。
    * 限速与开关都在 behavior.json → watch；默认关闭。
    */
-  #watchDecision(message, key) {
+  #watchDecision(message, key, { force = false, thread = false } = {}) {
     const behavior = readBehaviorConfig();
     const config = behavior.watch;
     const deny = (reason) => ({ allow: false, reason });
@@ -1612,7 +1690,8 @@ export class QqHarnessBridge {
     if (text && config.skipPromptTalk !== false && PROMPT_TALK_PATTERN.test(trimmed)) return deny('prompt-talk');
     const activityWindow = Number(config.activityWindowMinutes);
     const activityMin = Number(config.activityMinMessages);
-    if (!fullReview && !quoteRef && Number.isFinite(activityWindow) && activityWindow > 0
+    if (!fullReview && !quoteRef && !thread && !force
+      && Number.isFinite(activityWindow) && activityWindow > 0
       && Number.isFinite(activityMin) && activityMin > 0) {
       const nowForActivity = Date.now();
       const recentCount = (this.#recentChat.get(key) ?? [])
@@ -1623,22 +1702,26 @@ export class QqHarnessBridge {
     const state = this.#watchHistory.get(key) ?? { lastAtBySender: {}, hits: [] };
     if (!state.lastAtBySender || typeof state.lastAtBySender !== 'object') state.lastAtBySender = {};
     const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
-    // 引用消息、主人消息不按发送者冷却（否则同一个人 1 分钟内再发一句就被挡掉）。
-    const bypassSenderCooldown = quoteRef || ownerMessage;
+    // 引用消息、主人消息不按发送者冷却；线程窗口/补偿判断也绕过冷却。
+    const bypassSenderCooldown = quoteRef || ownerMessage || thread || force;
     if (!bypassSenderCooldown
       && now - (Number(state.lastAtBySender[senderId]) || 0) < (Number(config.minIntervalMs) || 0)) {
       return deny('sender-cooldown');
     }
     state.hits = (Array.isArray(state.hits) ? state.hits : []).filter((at) => now - at < 24 * 60 * 60 * 1000);
-    const hourHits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
-    const hourLimit = Number(config.maxPerHour);
-    if (Number.isFinite(hourLimit) && hourLimit > 0 && hourHits.length >= hourLimit) return deny('hour-cap');
-    const dayLimit = Number(config.maxPerDay);
-    if (Number.isFinite(dayLimit) && dayLimit > 0 && state.hits.length >= dayLimit) return deny('day-cap');
+    // 线程窗口/被提醒漏回：不因小时/日上限跳过（仍受每日预算兜底）。
+    if (!thread && !force) {
+      const hourHits = state.hits.filter((at) => now - at < 60 * 60 * 1000);
+      const hourLimit = Number(config.maxPerHour);
+      if (Number.isFinite(hourLimit) && hourLimit > 0 && hourHits.length >= hourLimit) return deny('hour-cap');
+      const dayLimit = Number(config.maxPerDay);
+      if (Number.isFinite(dayLimit) && dayLimit > 0 && state.hits.length >= dayLimit) return deny('day-cap');
+    }
     state.lastAtBySender[senderId] = now;
     state.hits.push(now);
     this.#watchHistory.set(key, state);
-    return { allow: true, reason: quoteRef ? 'quote-review' : 'watch' };
+    const reason = quoteRef ? 'quote-review' : thread ? 'thread-window' : force ? 'nudge' : 'watch';
+    return { allow: true, reason };
   }
 
   /** 本地补丁：记录每会话最近聊天（活跃度 + 复读检测 + 上下文摘要）。 */
@@ -1787,6 +1870,28 @@ export class QqHarnessBridge {
       return { action: 'reply', reason: 'addressed' };
     }
     if (this.#shouldJoinRepeat(message, key)) return { action: 'repeat', reason: 'repeat-chain' };
+    // 本地补丁（2026-10-25）：有人提醒「你怎么不回 X」→ 补偿判断一次（结合上下文决定要不要补回）。
+    const nudgeEnabled = readBehaviorConfig().threadWindow?.nudgeEnabled !== false;
+    if (nudgeEnabled && message?.senderIsBot !== true && isNudgeMessage(safeText(message))
+      && this.#allowBotReply(message, key)) {
+      const nudgeWatch = this.#watchDecision(message, key, { force: true });
+      if (nudgeWatch.allow) return { action: 'watch', reason: 'nudge' };
+    }
+    // 线程窗口：机器人刚发过言，其他人接话/反应优先交给模型判断（语义由模型决定）。
+    const threadState = this.#threadWindow(key);
+    if (threadState) {
+      const senderId = nonEmptyString(message?.senderId) ?? 'unknown';
+      if (!this.#threadTriggerAllowed(key, senderId)) {
+        return { action: 'skip', reason: 'thread-quota' };
+      }
+      const threadWatch = this.#watchDecision(message, key, { thread: true });
+      if (threadWatch.allow) {
+        this.#noteThreadTrigger(key, senderId);
+        return { action: 'watch', reason: 'thread-window' };
+      }
+      return { action: 'skip', reason: threadWatch.reason };
+    }
+    if (isClosingMessage(safeText(message))) this.#closeThreadWindow(key);
     const watch = this.#watchDecision(message, key);
     if (watch.allow) return { action: 'watch', reason: watch.reason };
     return { action: 'skip', reason: watch.reason };
@@ -3375,7 +3480,14 @@ export class QqHarnessBridge {
         const mediaNote = (hasQqImageAttachments(message) || hasQqFileAttachments(message))
           ? '\n这是图片/文件消息：除非有人明确问你，否则不要描述、解释、复读图里/文件里的内容（尤其不要像解说员一样逐条讲解）；最多一句很短的自然反应，或者直接静默。'
           : '';
-        const instruction = `${baseInstruction}${ownerExtra}${mediaNote}`;
+        // 本地补丁（2026-10-25）：线程窗口/被提醒漏回——给模型更多上下文判断语义。
+        const threadExtra = this.#threadWindow(key)
+          ? '\n你刚在这个话题里回过一句（线程窗口内）：这条是别人的接话/反应，结合上下文判断是不是在跟你或刚才的话说——是就自然接一句，不是/拿不准就静默。'
+          : '';
+        const nudgeExtra = isNudgeMessage(safeText(message))
+          ? '\n有人在提醒你刚才漏回了谁：先结合上下文判断是不是真的在跟你说话、要不要补一句；如果只是别人之间的事，就静默。'
+          : '';
+        const instruction = `${baseInstruction}${ownerExtra}${mediaNote}${threadExtra}${nudgeExtra}`;
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
@@ -3552,6 +3664,7 @@ export class QqHarnessBridge {
             this.#logger.info?.('[dsh-im:qq] engagement window closed after repeated silence');
           }
         }
+        if (watchMode) this.#noteThreadSilence(key);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent', engagedTurn });
         return;
       }
@@ -3566,6 +3679,7 @@ export class QqHarnessBridge {
             this.#logger.info?.('[dsh-im:qq] engagement window closed after repeated silence');
           }
         }
+        if (watchMode) this.#noteThreadSilence(key);
         this.#logOutcome(message, key, { action: 'silent', reason: 'model-silent-tool', engagedTurn });
         return;
       }
@@ -3689,6 +3803,7 @@ export class QqHarnessBridge {
           // 同时记进最近群聊，让下一轮能看见「刚才是我说的」。
           this.#rememberBotText(key, displayAnswer);
           if (message.kind === 'group') this.#rememberOwnChat(key, displayAnswer);
+          if (message.kind === 'group') this.#noteThreadReply(key);
           // 本地补丁：watch/复读接话成功后进入短接话窗口（同一个人后续聊能跟上）。
           if ((watchMode || repeatMode) && message.kind === 'group' && message.senderIsBot !== true) {
             this.#markEngaged(key, sender, 'watch');
@@ -3731,6 +3846,8 @@ export class QqHarnessBridge {
       if (!textSendError && delivery.artifactSendErrors === 0) {
         clearLastMessageFailure(this.#status);
       }
+      // 本地补丁（2026-10-25）：机器人刚在群里说过话 → 开线程窗口，其他人接话优先判断。
+      if (message.kind === 'group') this.#openThreadWindow(key);
       return delivery.receipt;
     } catch (error) {
       let batchFailureMessage = null;
