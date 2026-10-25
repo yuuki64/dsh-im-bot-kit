@@ -1,4 +1,4 @@
-// Split a chat-style reply into several short QQ messages.
+﻿// Split a chat-style reply into several short QQ messages.
 //
 // The operator asked for long sentences to be sent as separate messages, not
 // one long line, and explicitly not to rely on commas. This module works on
@@ -10,21 +10,54 @@ const SENTENCE_BREAK = /(?<=[。！？!?…；;])|\n+/u;
 const BLOCK_MARKER = /```|(^|\n)[ \t]*\|/u;
 const URL_PATTERN = /https?:\/\/\S+/iu;
 const HARD_SEGMENT_LIMIT = 4; // passive reply cap is 5 (group) / 4 (c2c)
+// 本地补丁（2026-10-25）：单句超过这个长度才按逗号兜底拆——只做极限兜底，不常规拆逗号。
+const LONG_SENTENCE_LIMIT = 60;
+const COMMA_BREAK = /[，,、]/gu;
 
 export const CHAT_SEGMENT_DEFAULTS = Object.freeze({
   maxChars: 60,
   maxSegments: 3,
+  longSentenceLimit: LONG_SENTENCE_LIMIT,
 });
 
 function normalizeOptions(options = {}) {
   const maxChars = Number(options.maxChars);
   const maxSegments = Number(options.maxSegments);
+  const longSentenceLimit = Number(options.longSentenceLimit);
   return {
     maxChars: Number.isFinite(maxChars) && maxChars >= 20 ? Math.floor(maxChars) : CHAT_SEGMENT_DEFAULTS.maxChars,
     maxSegments: Number.isFinite(maxSegments) && maxSegments >= 2
       ? Math.min(HARD_SEGMENT_LIMIT, Math.floor(maxSegments))
       : CHAT_SEGMENT_DEFAULTS.maxSegments,
+    longSentenceLimit: Number.isFinite(longSentenceLimit) && longSentenceLimit >= 20
+      ? Math.floor(longSentenceLimit)
+      : CHAT_SEGMENT_DEFAULTS.longSentenceLimit,
   };
+}
+
+/** Split a too-long single sentence at commas, capped at 2 segments. */
+export function splitLongSentence(value, maxSegments = 2) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  const cap = Math.max(2, Math.min(2, Number(maxSegments) || 2));
+  const segments = [];
+  let rest = text;
+  let remaining = cap;
+  while (remaining > 1) {
+    const positions = [...rest.matchAll(COMMA_BREAK)].map((match) => match.index + 1);
+    if (positions.length === 0) break;
+    const target = rest.length / remaining;
+    let cut = positions[0];
+    for (const position of positions) {
+      if (Math.abs(position - target) < Math.abs(cut - target)) cut = position;
+    }
+    const head = rest.slice(0, cut).trim();
+    if (!head) break;
+    segments.push(head);
+    rest = rest.slice(cut).trim();
+    remaining -= 1;
+  }
+  if (rest) segments.push(rest);
+  return segments.length >= 2 ? segments : null;
 }
 
 /** Split into sentence-ish pieces, keeping the trailing punctuation. */
@@ -76,14 +109,17 @@ function mergeToLimit(segments, limit) {
  * @returns {string[]|null}
  */
 export function splitChatSegments(text, options = {}) {
-  const { maxChars, maxSegments } = normalizeOptions(options);
+  const { maxChars, maxSegments, longSentenceLimit } = normalizeOptions(options);
   const value = typeof text === 'string' ? text.trim() : '';
   if (!value || value.length <= maxChars) return null;
   if (BLOCK_MARKER.test(value) || URL_PATTERN.test(value)) return null;
   const sentences = splitSentences(value);
-  // A single long sentence is left alone: the operator asked for long *messages*
-  // to be split at natural boundaries, not for one sentence to be cut in half.
-  if (sentences.length < 2) return null;
+  // A single long sentence is normally left alone; only an extreme one is split
+  // at commas (operator decision 2026-10-25: >80 chars, max 2 messages).
+  if (sentences.length < 2) {
+    if (value.length <= longSentenceLimit) return null;
+    return splitLongSentence(value, 2);
+  }
   const packed = packPieces(sentences, maxChars);
   if (packed.length < 2) return null;
   const capped = mergeToLimit(packed, maxSegments);
@@ -95,3 +131,4 @@ export function splitChatSegments(text, options = {}) {
 export function shouldSplitChatReply(text, options = {}) {
   return splitChatSegments(text, options) !== null;
 }
+

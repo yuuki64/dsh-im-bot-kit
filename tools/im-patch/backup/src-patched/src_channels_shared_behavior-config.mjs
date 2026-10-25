@@ -57,6 +57,8 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     maxDurationSeconds: 1800,
     maxTranscriptChars: 6000,
     cacheDays: 7,
+    commentsEnabled: true,
+    maxComments: 6,
     downloadTimeoutMs: 180000,
     subtitleTimeoutMs: 120000,
     asrTimeoutMs: 600000,
@@ -89,9 +91,11 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
   replyChunking: Object.freeze({
     enabled: true,
     maxChars: 20,
-    maxSegments: 3,
-    gapMinMs: 400,
-    gapMaxMs: 900,
+    maxSegments: 2,
+    gapMinMs: 600,
+    gapMaxMs: 600,
+    // 2026-10-25：单句超过这个长度时按逗号兜底拆（只兜底，不常规拆逗号）。
+    longSentenceLimit: 60,
   }),
   // 2026-10-24：同一人连发多条时先等一小会儿再一起回复（避免抢答第一句）。
   replyCoalesce: Object.freeze({

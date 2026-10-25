@@ -3501,6 +3501,7 @@ export class QqHarnessBridge {
             ? splitChatSegments(displayAnswer, {
               maxChars: chunking.maxChars,
               maxSegments: chunking.maxSegments,
+              longSentenceLimit: chunking.longSentenceLimit,
             })
             : null;
           const deliveries = await sendMarkdownReply(this.#bot, target, displayAnswer, {
