@@ -1188,3 +1188,11 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **2026-10-26 追加（表情清晰度/尺寸）**：QQ 聊天气泡图片尺寸和像素尺寸近似线性（128px→约 290px 宽、320px→约 770px），无法既保持小尺寸又高清。最终用 `sticker-restore-clarity.py` 重建为 **最长边 160px、静态图无损 PNG、GIF 保留原字节**（501 张 / 60.8MB）；128/320 版本都在 `_archive/`。
 - **追加（发送 ENOENT）**：机器人运行中外部重建/重命名表情文件时，插件 10 分钟内存缓存会留下旧文件名 → 报 `表情包没发出去：ENOENT`。`pickSticker` 已加兜底：读文件 ENOENT → `listStickers({refresh:true})` 重挑一次；重启后缓存清空也不再出现。
 
+### 18.35 QQ 语音本地转写（SILK → faster-whisper）（2026-10-26 第三十二轮）
+
+- **为什么听不到**：QQ 语音实际是 **SILK v3**（文件头 `0x02 + "#!SILK_V3"`），后缀常写成 `.amr`；群聊里 QQ 不提供 `asr_refer_text`，而原来的 ASR（faster-whisper + PyAV）不认 SILK；引用语音时还会把 SILK 当普通 `.amr` 文件塞给模型 → 模型只能说“收到 amr 文件，听不了”。
+- **修复**：video venv 里装 `pysilk`（纯 Python，免 MSVC；`pilk` 无 cp312 轮子且需要 VS Build Tools）+ `zhconv`；新增 `transcribeVoiceBuffer()`（video-helper，导出）：SILK→PCM 24k→WAV→faster-whisper（small，zh，转简体）。
+- **桥接**：`qqInboundMessage` 对没有转写的语音返回 `audioSources`；`#process` 在引用附件后统一处理当前语音 + 引用里的 `.amr/.silk`，转写成功后从 `files` 移除音频并注入 `[语音转文字] …`；失败则注入“转写失败，不要猜内容”。
+- **配置**：`behavior.json → voiceAsr {enabled, model:'small', device:'cpu', timeoutMs}`；想更准可把 model 换 `medium`（更慢）。
+- **实测**：昨天的群语音「醒着呢?我是初同心悦…」（small + zhconv，简体）；20 个测试全绿；**需重启一次 DSH**。
+
