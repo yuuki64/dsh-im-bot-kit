@@ -39,7 +39,7 @@ export async function writeSnapshotAtomically(fs, path, snapshot, { attempts = 6
 
 
 const PENDING_MESSAGE_LIMIT = 200;
-const EMPTY_STATE = Object.freeze({ version: 1, sessions: {}, seenMessageIds: [] });
+const EMPTY_STATE = Object.freeze({ version: 1, sessions: {}, seenMessageIds: [], meta: {} });
 
 /**
  * A message persisted when it enters the QQ bridge's in-memory queue, so a
@@ -93,12 +93,19 @@ function normalizeState(value) {
   // An empty queue leaves no key behind, so an untouched state file keeps the
   // shape earlier versions wrote.
   const pendingMessages = normalizePendingMessages(value.pendingMessages);
+  const meta = {};
+  if (value.meta && typeof value.meta === 'object' && !Array.isArray(value.meta)) {
+    for (const [key, entry] of Object.entries(value.meta)) {
+      if (typeof key === 'string' && key) meta[key] = entry;
+    }
+  }
   return {
     version: 1,
     sessions,
     includeArchivedSessions: value.includeArchivedSessions === true,
     ...(pendingMessages.length ? { pendingMessages } : {}),
     ...(value.deferred ? { deferred: normalizeDeferredState(value.deferred) } : {}),
+    ...(Object.keys(meta).length ? { meta } : { meta }),
     seenMessageIds: Array.isArray(value.seenMessageIds)
       ? value.seenMessageIds.filter((id) => typeof id === 'string').slice(-1_000)
       : [],
@@ -223,6 +230,17 @@ export class QqStateStore {
 
   async clearSessions() {
     this.#state.sessions = {};
+    await this.#persist();
+  }
+
+  /** 本地补丁（2026-10-26）：通用标记（如一次性会话轮换版本）。 */
+  meta(key) {
+    return this.#state.meta?.[key];
+  }
+
+  async setMeta(key, value) {
+    if (!this.#state.meta || typeof this.#state.meta !== 'object') this.#state.meta = {};
+    this.#state.meta[key] = value;
     await this.#persist();
   }
 

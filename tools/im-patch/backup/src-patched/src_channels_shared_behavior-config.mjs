@@ -171,6 +171,19 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     warnAfter: 2,
     muteSeconds: 180,
   }),
+  // 2026-10-26：按渠道覆盖模型/思考强度；null 或缺省 = 继承 bot 设置面板里的值。
+  channelModels: Object.freeze({
+    direct: Object.freeze({ reasoningEffort: null }),
+    group: Object.freeze({ reasoningEffort: null }),
+  }),
+  // 2026-10-26：私聊里问“群里说了什么”时，注入最近群聊摘要（仅主人）。
+  privateGroupDigest: Object.freeze({
+    enabled: true,
+    groups: 2,
+    minutes: 120,
+    maxMessages: 12,
+    maxChars: 900,
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),

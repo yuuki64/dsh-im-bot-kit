@@ -1,55 +1,77 @@
 import { withSessionBindingLock } from './session-binding-lock.mjs';
 import { initialSessionTitle } from './session-title.mjs';
 import { messageDiagnosticError } from './connection-error.mjs';
-import { readGroupReasoningCeiling } from './group-reasoning.mjs';
+import { readGroupReasoningOverride } from './group-reasoning.mjs';
+import { readBehaviorConfig } from './behavior-config.mjs';
 
 export const WORKSPACE_SESSION_STALE = 'workspace-session-stale';
 
-// IM bots should not think on the expensive tier by default: the owner asked
-// for "low unless raised". We apply it once per session per process, so a
-// session the owner deliberately changed with /reasoning keeps that choice for
-// the rest of this process; a fresh process re-applies the default.
-const reasoningDefaultsApplied = new Set();
+// 本地补丁（2026-10-26）：按渠道（私聊/群聊）应用模型/思考强度。
+// null/缺省 = 继承 bot 设置面板；只有配置了才覆盖。签名变化时重新应用。
+const channelModelApplied = new Map();
 
 /**
- * Best-effort: put the session on the default (cheapest) reasoning tier.
- * Group conversations honour the owner-set ceiling from `/effort`; direct
- * conversations always default to `low`.
- *
- * Uses the Host's model API (models → selectModel) rather than a `/reasoning`
- * slash command: that command is implemented by the IM layer, not the Host, so
- * sending it through executeCommand() fails and silently leaves the session on
- * its original tier.
- *
- * Never throws, and never changes an unknown/unsupported tier.
+ * Best-effort：把会话切到该渠道配置的模型/思考强度。
+ * - behavior.json → channelModels.direct / .group 里显式配了才覆盖；
+ * - 群聊另外尊重主人用 /effort 设过的上限（没设过就继承面板值）；
+ * - 不抛错，不认识的强度会跳过。
  * @returns {Promise<'applied'|'already'|'unsupported'|'failed'|'skipped'>}
  */
 export async function ensureReasoningDefault(session, sessionId, conversationKey, options) {
-  if (!sessionId || reasoningDefaultsApplied.has(sessionId)) return 'skipped';
+  if (!sessionId) return 'skipped';
   if (typeof session?.models !== 'function' || typeof session?.selectModel !== 'function') return 'skipped';
-  reasoningDefaultsApplied.add(sessionId);
-  const ceiling = typeof conversationKey === 'string' && conversationKey.startsWith('group:')
-    ? await readGroupReasoningCeiling().catch(() => 'low')
-    : 'low';
+  const isGroup = typeof conversationKey === 'string' && conversationKey.startsWith('group:');
+  const channel = isGroup ? 'group' : 'direct';
+  let config = {};
+  try {
+    config = readBehaviorConfig().channelModels?.[channel] ?? {};
+  } catch {
+    config = {};
+  }
+  let effort = typeof config.reasoningEffort === 'string' && config.reasoningEffort
+    ? config.reasoningEffort
+    : null;
+  if (!effort && isGroup) {
+    effort = await readGroupReasoningOverride().catch(() => null);
+  }
+  const modelOverride = config.model && typeof config.model === 'object'
+    && typeof config.model.provider === 'string' && typeof config.model.model === 'string'
+    ? { provider: config.model.provider, model: config.model.model }
+    : null;
+  const signature = JSON.stringify({ channel, effort, model: modelOverride });
+  if (channelModelApplied.get(sessionId) === signature) return 'already';
+  if (!effort && !modelOverride) {
+    // 继承 bot 面板设置：不主动改，避免把面板里的值又压下去。
+    channelModelApplied.set(sessionId, signature);
+    return 'skipped';
+  }
   const callOptions = options ?? {};
   try {
     const catalog = await session.models(callOptions);
     const current = catalog?.current;
     if (!current?.provider || !current?.model) return 'failed';
-    const model = (catalog?.groups ?? [])
-      .find((group) => group?.id === current.provider)
-      ?.models?.find((entry) => entry?.id === current.model);
-    const efforts = model?.reasoning?.efforts ?? [];
-    if (!efforts.some((effort) => effort?.id === ceiling)) return 'unsupported';
-    if (current.reasoningEffort === ceiling) return 'already';
+    const desiredProvider = modelOverride?.provider ?? current.provider;
+    const desiredModel = modelOverride?.model ?? current.model;
+    const entry = (catalog?.groups ?? [])
+      .find((group) => group?.id === desiredProvider)
+      ?.models?.find((model) => model?.id === desiredModel);
+    if (!entry) return 'unsupported';
+    const supportedEfforts = entry?.reasoning?.efforts ?? [];
+    if (effort && !supportedEfforts.some((item) => item?.id === effort)) return 'unsupported';
+    if (current.provider === desiredProvider && current.model === desiredModel
+      && (effort === null || current.reasoningEffort === effort)) {
+      channelModelApplied.set(sessionId, signature);
+      return 'already';
+    }
     const selected = await session.selectModel({
-      provider: current.provider,
-      model: current.model,
-      reasoningEffort: ceiling,
+      provider: desiredProvider,
+      model: desiredModel,
+      ...(effort ? { reasoningEffort: effort } : {}),
     }, callOptions);
-    return selected?.selected?.reasoningEffort === ceiling ? 'applied' : 'failed';
+    channelModelApplied.set(sessionId, signature);
+    return selected?.selected ? 'applied' : 'failed';
   } catch (error) {
-    console.warn('[dsh-im] unable to set the default reasoning tier:', error?.message ?? error);
+    console.warn('[dsh-im] unable to apply the channel model setting:', error?.message ?? error);
     return 'failed';
   }
 }

@@ -320,6 +320,22 @@ export class GroupHistoryStore {
       coverage: 'Only messages actually received by this plugin; not complete platform history.' };
   }
 
+  /** 本地补丁（2026-10-26）：最近活跃的群（私聊里“群里说了什么”查询用）。 */
+  async recentGroups(limit = 3) {
+    await this.ready();
+    if (this.#settingsError) throw invalid(this.#settingsError);
+    const rows = this.#db.prepare(`SELECT g.id AS group_id, g.platform_group_id, g.name,
+      MAX(m.sent_at) AS last_sent_at FROM groups g JOIN messages m ON m.group_id = g.id
+      WHERE m.sent_at >= ? GROUP BY g.id ORDER BY last_sent_at DESC LIMIT ?`)
+      .all(this.cutoff(), Math.max(1, Number(limit) || 3));
+    return rows.map((row) => ({
+      groupId: row.group_id,
+      platformGroupId: row.platform_group_id,
+      name: row.name || '',
+      lastSentAt: row.last_sent_at,
+    }));
+  }
+
   async materialize(groupId, attachmentId, workspace) {
     await this.ready();
     if (this.#settingsError) throw invalid(this.#settingsError);
