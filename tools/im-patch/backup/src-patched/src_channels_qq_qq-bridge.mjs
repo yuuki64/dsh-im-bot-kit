@@ -117,7 +117,7 @@ import {
 import { readBehaviorConfig } from '../shared/behavior-config.mjs';
 import { chargeBudget, isBudgetExhausted, botSpentCny } from '../shared/cost-budget.mjs';
 import { appendDecision, readRecentDecisions } from '../shared/decision-log.mjs';
-import { buildBilibiliContext, extractBilibiliRefs, isVisualQuestion, peekCachedVideo } from '../shared/video-helper.mjs';
+import { buildBilibiliContext, extractBilibiliRefs, isVisualQuestion, peekCachedVideo, transcribeVoiceBuffer } from '../shared/video-helper.mjs';
 import {
   captureFacts, clearMemory, digestDoneToday, forgetMemory, listHabits, listMemoryGroups, loadMemory,
   markDigestDone, memoryStats, pruneMemory, recentFactTexts, recordHabitObservation,
@@ -868,6 +868,7 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
   const images = [];
   const files = [];
   const voiceNotes = [];
+  const audioSources = [];
   for (const attachment of message?.attachments ?? []) {
     const url = nonEmptyString(attachment?.url);
     const name = nonEmptyString(attachment?.filename) ?? undefined;
@@ -878,6 +879,15 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
     if (qqAttachmentKind(attachment) === 'audio') {
       const transcript = nonEmptyString(attachment?.asr_refer_text);
       voiceNotes.push(transcript ? `[语音] ${transcript}` : '[语音消息（没有可用的转写文字）]');
+      // 本地补丁（2026-10-26）：QQ 没给转写时，把音频留给桥接层用本地 ASR 转写。
+      if (!transcript && url) {
+        audioSources.push({
+          name: name ?? 'voice.amr',
+          ...(mediaType ? { mediaType } : {}),
+          ...(Number.isFinite(declaredSize) && declaredSize >= 0 ? { size: declaredSize } : {}),
+          load: ({ signal } = {}) => fetchQqFileBuffer(url, { fetchImpl, signal }),
+        });
+      }
       continue;
     }
     if (isQqImageAttachment(attachment)) {
@@ -914,6 +924,7 @@ export function qqInboundMessage(message, { fetchImpl = fetch } = {}) {
     content,
     images,
     files,
+    ...(audioSources.length > 0 ? { audioSources } : {}),
     ...(replyTo ? { replyTo } : {}),
   };
 }
@@ -3652,6 +3663,52 @@ export class QqHarnessBridge {
       promptMessage.files = captureQuotedMedia(quoteScope, messageId, promptMessage.files, { kind: 'file' });
     }
     await this.#attachQuotedMedia(message, promptMessage);
+    // 本地补丁（2026-10-26）：语音转文字——当前消息的语音 + 引用里的语音
+    // （QQ 语音是 SILK v3，本地 pysilk 解码后交给 faster-whisper）。
+    {
+      const voiceConfig = readBehaviorConfig().voiceAsr ?? {};
+      if (voiceConfig.enabled !== false) {
+        const audioPattern = /\.(?:amr|silk|slk|mp3|wav|m4a|ogg)$/iu;
+        const looksAudio = (item) => audioPattern.test(String(item?.name ?? ''))
+          || String(item?.mediaType ?? '').toLowerCase().startsWith('audio/');
+        const jobs = Array.isArray(promptMessage.audioSources) ? promptMessage.audioSources.slice(0, 3) : [];
+        if (Array.isArray(promptMessage.files)) {
+          promptMessage.files = promptMessage.files.filter((item) => {
+            if (!looksAudio(item)) return true;
+            jobs.push(item);
+            return false;
+          });
+        }
+        const lines = [];
+        const videoConfig = readBehaviorConfig().video ?? {};
+        for (const item of jobs) {
+          try {
+            const bytes = await item.load?.({ signal: this.#signal });
+            if (!Buffer.isBuffer(bytes) || bytes.length < 256) continue;
+            const transcript = await transcribeVoiceBuffer(bytes, {
+              config: {
+                ...videoConfig,
+                whisperModel: voiceConfig.model ?? 'small',
+                whisperDevice: voiceConfig.device ?? 'cpu',
+                asrTimeoutMs: Number(voiceConfig.timeoutMs) || 120_000,
+              },
+            });
+            const clean = String(transcript ?? '').replace(/\s+/gu, ' ').trim().slice(0, 400);
+            if (clean) lines.push(clean);
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] voice transcription failed:', error?.message ?? error);
+          }
+        }
+        if (lines.length > 0) {
+          const block = `[语音转文字] ${lines.join(' / ')}`;
+          const base = String(promptMessage.content ?? '').replace(/\[语音消息（没有可用的转写文字）\]\s*/gu, '').trim();
+          promptMessage.content = [base, block].filter(Boolean).join('\n');
+        } else if (jobs.length > 0) {
+          promptMessage.content = [promptMessage.content,
+            '[语音消息] （本地转写失败，不要猜内容，可以请对方再发一次或打字）'].filter(Boolean).join('\n');
+        }
+      }
+    }
     // 本地补丁（2026-10-25）：等收藏任务收尾（最多等 3 秒，避免下载慢拖住回复），拿真实成功/失败原因。
     const stickerCollectRun = this.#stickerCollectRuns.get(messageId);
     const stickerCollect = stickerCollectRun

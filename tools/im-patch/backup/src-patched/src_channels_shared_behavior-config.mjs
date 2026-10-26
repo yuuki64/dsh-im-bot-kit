@@ -184,6 +184,13 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     maxMessages: 12,
     maxChars: 900,
   }),
+  // 2026-10-26：QQ 语音（SILK v3）本地转写；small 模型优先保证响应速度。
+  voiceAsr: Object.freeze({
+    enabled: true,
+    model: 'small',
+    device: 'cpu',
+    timeoutMs: 120000,
+  }),
   proactive: Object.freeze({
     enabled: false,
     dailyTimes: Object.freeze(['07:45', '11:45', '17:45']),
