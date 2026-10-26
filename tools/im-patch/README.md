@@ -1185,4 +1185,6 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **修复 4（工具与身份）**：所有渠道追加“不要调用 session_event_read/session_search/session_trace”提示；主人私聊追加“现在跟你私聊的人就是主人本人”，避免把主人当第三人。
 - **测试**：`test-reasoning-default.mjs` 重写为按渠道语义（默认继承/私聊 low/群聊 high/不重复应用/不支持跳过）；test-media-intent 新增 3 项 `isGroupQuestion`；20 个测试文件全绿。
 - 代码改动已 apply，**需重启一次 DSH** 生效。改完后：面板仍是 bot 默认，渠道配置（channelModels）优先级更高；不配渠道就是用面板值（flash + off）。
+- **2026-10-26 追加（表情清晰度/尺寸）**：QQ 聊天气泡图片尺寸和像素尺寸近似线性（128px→约 290px 宽、320px→约 770px），无法既保持小尺寸又高清。最终用 `sticker-restore-clarity.py` 重建为 **最长边 160px、静态图无损 PNG、GIF 保留原字节**（501 张 / 60.8MB）；128/320 版本都在 `_archive/`。
+- **追加（发送 ENOENT）**：机器人运行中外部重建/重命名表情文件时，插件 10 分钟内存缓存会留下旧文件名 → 报 `表情包没发出去：ENOENT`。`pickSticker` 已加兜底：读文件 ENOENT → `listStickers({refresh:true})` 重挑一次；重启后缓存清空也不再出现。
 

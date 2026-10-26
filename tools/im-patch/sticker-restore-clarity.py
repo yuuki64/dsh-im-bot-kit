@@ -29,16 +29,12 @@ def fit_size(width, height, limit):
     return (max(8, int(round(width * scale))), max(8, int(round(height * scale))))
 
 
-def resize_static(src, dst, ext, limit):
+def resize_static(src, dst, limit):
     img = Image.open(src)
     size = fit_size(img.width, img.height, limit)
     work = img if size == img.size else img.resize(size, Image.LANCZOS)
-    if ext == "png":
-        work.save(dst, "PNG", optimize=True)
-    elif ext == "webp":
-        work.save(dst, "WEBP", quality=92, method=6)
-    else:
-        work.convert("RGB").save(dst, "JPEG", quality=92, optimize=True, progressive=True)
+    # 小尺寸下 PNG 无损比 JPEG 明显清楚（没有压缩噪点/糊边）。
+    work.save(dst, "PNG", optimize=True)
 
 
 def resize_gif(src, dst, limit):
@@ -76,7 +72,8 @@ def main():
         suffix = f"_{'-'.join(clean_tags)}" if clean_tags else ""
         import hashlib
         digest = hashlib.sha1(open(src, "rb").read()).hexdigest()[:16]
-        dst = os.path.join(LIB, f"auto_{digest}{suffix}.{real}")
+        out_ext = "gif" if real == "gif" else "png"
+        dst = os.path.join(LIB, f"auto_{digest}{suffix}.{out_ext}")
         try:
             if real == "gif":
                 img = Image.open(src)
@@ -88,7 +85,7 @@ def main():
                     resize_gif(src, dst, limit)
                     rebuilt += 1
             else:
-                resize_static(src, dst, real, limit)
+                resize_static(src, dst, limit)
                 rebuilt += 1
             if os.path.getsize(dst) > MAX_BYTES:
                 os.remove(dst)
