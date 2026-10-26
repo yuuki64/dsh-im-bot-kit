@@ -191,26 +191,44 @@ export function sanitizeStickerTags(tags, max = 2) {
  * @returns {Promise<{path: string, name: string, mediaType: string, bytes: Buffer}|null>}
  */
 export async function pickSticker(query = '') {
-  const stickers = await listStickers();
-  if (stickers.length === 0) return null;
   const tokens = expandStickerTokens(String(query ?? '')
     .toLowerCase()
     .split(/[\s,，。!！?？、/|]+/u)
     .map((token) => token.trim())
     .filter((token) => token.length >= 1 && token.length <= 12));
-  const scored = tokens.length > 0
-    ? stickers.map((sticker) => ({ sticker, score: score(sticker, tokens) }))
-      .filter((entry) => entry.score > 0)
-      .sort((left, right) => right.score - left.score)
-    : [];
-  const pool = scored.length > 0 ? scored.slice(0, 24).map((entry) => entry.sticker) : stickers;
-  const fresh = pool.filter((sticker) => !recent.includes(sticker.path));
-  const candidates = fresh.length > 0 ? fresh : pool;
-  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-  recent.push(chosen.path);
-  while (recent.length > 24) recent.shift();
-  const bytes = await readFile(chosen.path);
-  return { ...chosen, bytes };
+  const choose = (stickers) => {
+    if (!Array.isArray(stickers) || stickers.length === 0) return null;
+    const scored = tokens.length > 0
+      ? stickers.map((sticker) => ({ sticker, score: score(sticker, tokens) }))
+        .filter((entry) => entry.score > 0)
+        .sort((left, right) => right.score - left.score)
+      : [];
+    const pool = scored.length > 0 ? scored.slice(0, 24).map((entry) => entry.sticker) : stickers;
+    const fresh = pool.filter((sticker) => !recent.includes(sticker.path));
+    const candidates = fresh.length > 0 ? fresh : pool;
+    return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
+  };
+  const remember = (chosen) => {
+    recent.push(chosen.path);
+    while (recent.length > 24) recent.shift();
+  };
+  let chosen = choose(await listStickers());
+  if (!chosen) return null;
+  try {
+    const bytes = await readFile(chosen.path);
+    remember(chosen);
+    return { ...chosen, bytes };
+  } catch (error) {
+    // 本地补丁（2026-10-26）：表情库被外部编辑（重命名/重建/批量导入）时，
+    // 10 分钟缓存里可能还是旧文件名；ENOENT 时刷新一次再挑，避免“表情包没发出去”。
+    if (error?.code !== 'ENOENT') throw error;
+    recent.length = 0;
+    chosen = choose(await listStickers({ refresh: true }));
+    if (!chosen) return null;
+    const bytes = await readFile(chosen.path);
+    remember(chosen);
+    return { ...chosen, bytes };
+  }
 }
 
 export function stickerCount(stickers) {
