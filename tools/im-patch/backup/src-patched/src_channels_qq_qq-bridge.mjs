@@ -609,6 +609,19 @@ export function isNudgeMessage(text) {
 }
 
 /**
+ * 本地补丁（2026-10-26）：私聊里是不是在问“群里说了什么”（只在主人私聊里用来注入群聊摘要）。
+ * 必须同时有“群/他们/大家”类词 + “说/聊/问/干啥”类词，避免普通聊天误触发。
+ */
+const GROUP_QUESTION_PATTERN = /(?:群里|群聊|群友|群里面|那帮人|他们几个|大家)/u;
+const GROUP_QUESTION_VERB = /(?:说|聊|讨论|提|问|干啥|干嘛|怎么样|什么|啥)/u;
+
+export function isGroupQuestion(text) {
+  const value = String(text ?? '').trim();
+  if (!value) return false;
+  return GROUP_QUESTION_PATTERN.test(value) && GROUP_QUESTION_VERB.test(value);
+}
+
+/**
  * 本地补丁（2026-10-25）：上一次 watch 判断是“静默”时，同一发送者的下一句不再被冷却硬跳过
  * （否则像「你说的是…这条等着吃的鱼」这种分段追问会被整段吞掉）；连续静默 3 次后恢复正常冷却。
  */
@@ -3545,6 +3558,36 @@ export class QqHarnessBridge {
     }
   }
 
+  /** 本地补丁（2026-10-26）：私聊里问群里的事 → 从群历史归档取最近消息拼成摘要。 */
+  async #privateGroupDigest(config = {}) {
+    const store = this.#groupHistory;
+    if (!store || typeof store.recentGroups !== 'function' || typeof store.query !== 'function') return '';
+    const groups = await store.recentGroups(Math.max(1, Number(config.groups) || 2));
+    const minutes = Math.max(1, Number(config.minutes) || 120);
+    const limit = Math.max(1, Number(config.maxMessages) || 12);
+    const maxChars = Math.max(160, Number(config.maxChars) || 900);
+    const lines = [];
+    for (const group of Array.isArray(groups) ? groups : []) {
+      let result = null;
+      try {
+        result = await store.query(group.groupId, { from: Date.now() - minutes * 60_000, limit });
+      } catch {
+        continue;
+      }
+      const items = Array.isArray(result?.items) ? result.items : [];
+      if (items.length === 0) continue;
+      lines.push(`【${group.name || group.platformGroupId || '群聊'}】`);
+      for (const item of items.slice(-limit)) {
+        const name = String(item?.senderName ?? '某人').slice(0, 24);
+        const body = String(item?.text ?? '').replace(/\s+/gu, ' ').trim().slice(0, 60);
+        if (body) lines.push(`- ${name}: ${body}`);
+      }
+    }
+    if (lines.length === 0) return '';
+    const block = `[群聊近况（只读摘要，来自机器人实际收到的群消息）]\n${lines.join('\n')}`;
+    return block.length > maxChars ? `${block.slice(0, maxChars)}…` : block;
+  }
+
   async #process(message, key, {
     alreadyRecorded = false,
     preparedMessage,
@@ -3774,6 +3817,35 @@ export class QqHarnessBridge {
           text = `${text}\n\n[系统提示] ${hint}`;
           content = appendPromptPart(content, `\n\n[系统提示] ${hint}`);
         }
+      }
+      // 本地补丁（2026-10-26）：私聊里问“群里说了什么” → 注入最近群聊摘要（仅主人）。
+      {
+        const digestConfig = readBehaviorConfig().privateGroupDigest;
+        const directOwner = message?.kind === 'c2c'
+          && isOwnerSender(message, this.#ownerUserOpenid);
+        if (digestConfig?.enabled !== false && directOwner && isGroupQuestion(safeText(message))) {
+          try {
+            const digest = await this.#privateGroupDigest(digestConfig);
+            if (digest) {
+              text = `${text}\n\n[系统提示] ${digest}`;
+              content = appendPromptPart(content, `\n\n[系统提示] ${digest}`);
+            }
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] private group digest failed:', error?.message ?? error);
+          }
+        }
+      }
+      // 本地补丁（2026-10-26）：不要调用会话工具（受限 preset 下会失败并报错给用户）。
+      {
+        const instruction = '不要调用 session_event_read、session_search、session_trace 这类会话工具（当前受限环境下会失败）；需要群聊信息时只看我给你的上下文，不要编造。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
+      }
+      // 本地补丁（2026-10-26）：私聊对象就是主人本人，别把他当外人/第三人。
+      if (message?.kind === 'c2c' && isOwnerSender(message, this.#ownerUserOpenid)) {
+        const instruction = '现在跟你私聊的人就是你的主人本人（不是陌生人、也不是群友）。不要把他当外人，也不要说什么“我是主人的宝宝”这种把主人当成第三人的话；主人说的亲密称呼按人设接。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
       // 本地补丁：习惯/口头禅——偶尔提示模型模仿对方语气（概率门控，避免每条都学）。
       {

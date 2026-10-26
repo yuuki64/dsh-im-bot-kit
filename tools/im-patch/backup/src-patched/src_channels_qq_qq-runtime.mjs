@@ -292,6 +292,18 @@ export class QqRuntime {
     const controller = new AbortController();
     this.#abortController = controller;
     this.#bot = bot;
+    // 本地补丁（2026-10-26）：一次性轮换旧会话——旧会话可能还带着过期 preset/模型
+    // （实测私聊还停在 standard preset，导致 session 工具报错、模型/强度和面板不一致）。
+    try {
+      const rotated = Number(this.#state.meta?.('sessionRotationVersion')) || 0;
+      if (rotated < 1) {
+        await this.#state.clearSessions();
+        await this.#state.setMeta('sessionRotationVersion', 1);
+        this.#logger.info?.('[dsh-im:qq] rotated legacy sessions once (preset/model consistency)');
+      }
+    } catch (error) {
+      this.#logger.warn?.('[dsh-im:qq] session rotation failed:', error?.message ?? error);
+    }
     this.#bridge = new QqHarnessBridge({
       bot,
       botId: this.#config.botId,

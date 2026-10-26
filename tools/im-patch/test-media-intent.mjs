@@ -21,9 +21,14 @@ try {
   const {
     extractMediaIntent, mentionsBotByName, qqInboundMessage, isRepeatChain, matchesOwnText,
     appendPromptPart, mergeCoalescedMessages, formatChatDigest, isNudgeMessage,
-    silenceRecheckAllowed, shouldWarnJoke, stickerCollectFailureText,
+    silenceRecheckAllowed, shouldWarnJoke, stickerCollectFailureText, isGroupQuestion,
   } = await import(src('src/channels/qq/qq-bridge.mjs'));
   const { pickProactiveText } = await import(src('src/channels/qq/qq-proactive.mjs'));
+
+  // 2026-10-26：私聊里“群里说了什么”识别（只在主人私聊用来注入群聊摘要）。
+  check('group question: 群里他们聊了啥', isGroupQuestion('群里他们聊了啥') === true);
+  check('group question: 大家刚才在说什么', isGroupQuestion('大家刚才在说什么') === true);
+  check('group question: 普通消息不算', isGroupQuestion('我吃过了') === false);
 
   // 2026-10-25：线程窗口相关纯函数。
   check('nudge: 你怎么不回蓝莓', isNudgeMessage('你怎么不回蓝莓') === true);

@@ -43,6 +43,19 @@ export async function readGroupReasoningCeiling() {
   }
 }
 
+/**
+ * 本地补丁（2026-10-26）：只有主人真的用 /effort 设过才返回强度，
+ * 没设过返回 null（= 继承 bot 设置面板，不再默认压到 low）。
+ */
+export async function readGroupReasoningOverride() {
+  try {
+    const raw = await readFile(groupReasoningPath(), 'utf8');
+    return normalizeReasoningCeiling(JSON.parse(raw)?.groupReasoning);
+  } catch {
+    return null;
+  }
+}
+
 /** Persist a validated ceiling (write tmp + rename). */
 export async function writeGroupReasoningCeiling(value) {
   const ceiling = normalizeReasoningCeiling(value);

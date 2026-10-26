@@ -1175,3 +1175,14 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **测试**：`test-media-intent.mjs` 新增 4 项失败原因文案；20 个测试文件全绿。
 - 代码改动已 apply，**需重启一次 DSH** 生效。
 
+### 18.34 按渠道模型/强度 + 旧会话轮换 + 私聊查群聊 + 主人身份（2026-10-26 第三十一轮）
+
+- **问题**：设置面板的模型/思考强度和聊天窗口不一致；私聊报 `session_event_read` 未成功；私聊查不到群聊；私聊把主人当外人（“我是主人的宝宝”）。
+- **根因**：设置面板是 **per-bot** 的默认配置；会话创建时固化 preset/模型。yuri 的私聊还绑着 10 月以前创建的 **standard preset 旧会话**（170 工具，含 session_event_read），群聊才是新的 qq-bot 会话；旧会话模型/强度也停在创建时的值。
+- **修复 1（按渠道模型/强度）**：`behavior.json → channelModels.direct/group { reasoningEffort, model? }`；null/缺省 = 继承面板；显式配置才覆盖。群聊 `/effort` 改成“设过才生效”，不再默认压 low。
+- **修复 2（一次性会话轮换）**：runtime 启动时若 `state.meta.sessionRotationVersion < 1` → `state.clearSessions()` 并写入版本；私聊/群聊下一条消息会用当前 preset（qq-bot）和模型重建，`session_event_read` 报错消失。
+- **修复 3（私聊查群聊）**：`group-history-store.recentGroups()` + bridge `#privateGroupDigest()`；主人私聊里问“群里/大家/他们…说了什么”时注入最近 1~2 个群的 12 条消息摘要（只读、可配时长/条数/字数）。
+- **修复 4（工具与身份）**：所有渠道追加“不要调用 session_event_read/session_search/session_trace”提示；主人私聊追加“现在跟你私聊的人就是主人本人”，避免把主人当第三人。
+- **测试**：`test-reasoning-default.mjs` 重写为按渠道语义（默认继承/私聊 low/群聊 high/不重复应用/不支持跳过）；test-media-intent 新增 3 项 `isGroupQuestion`；20 个测试文件全绿。
+- 代码改动已 apply，**需重启一次 DSH** 生效。改完后：面板仍是 bot 默认，渠道配置（channelModels）优先级更高；不配渠道就是用面板值（flash + off）。
+
