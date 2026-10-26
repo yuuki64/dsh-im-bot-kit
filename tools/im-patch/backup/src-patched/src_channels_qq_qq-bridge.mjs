@@ -1791,8 +1791,27 @@ export class QqHarnessBridge {
       const looksLikeImage = quotedKinds.some((attachment) => attachment?.kind === 'image');
       if (refId && (looksLikeImage || quotedKinds.length === 0)) {
         const scope = qqConversationScope(message);
-        const cached = quotedMediaFor(scope, refId)
+        let cached = quotedMediaFor(scope, refId)
           .filter((item) => item?.kind === 'image' || String(item?.mediaType ?? '').startsWith('image/'));
+        // 2026-10-26：引用缓存只在内存里（重启/6 小时后会丢）→ 回退到群历史归档（可存 14 天）。
+        if (cached.length === 0) {
+          const store = message?.groupHistory?.store;
+          const groupId = message?.groupHistory?.groupId;
+          if (store && typeof store.imagesForPlatformMessage === 'function' && groupId) {
+            try {
+              const archive = await store.imagesForPlatformMessage(
+                groupId,
+                refId,
+                quotedKinds.filter((attachment) => attachment?.kind === 'image').map((attachment) => attachment?.name),
+              );
+              cached = (Array.isArray(archive) ? archive : [])
+                .filter((item) => String(item?.mediaType ?? '').startsWith('image/'))
+                .slice(0, 2);
+            } catch (error) {
+              this.#logger.warn?.('[dsh-im:qq] quoted sticker archive lookup failed:', error?.message ?? error);
+            }
+          }
+        }
         if (cached.length === 0) {
           note('quoted-not-cached');
         } else {
@@ -1802,7 +1821,10 @@ export class QqHarnessBridge {
               perHour: config.perHour,
               perDay: config.perDay,
             })) { note('rate-limited'); break; }
-            const bytes = item?.data ?? item?.bytes;
+            let bytes = item?.data ?? item?.bytes;
+            if (!Buffer.isBuffer(bytes) && typeof item?.load === 'function') {
+              bytes = await item.load().catch(() => null);
+            }
             if (!Buffer.isBuffer(bytes)) { note('download-failed'); continue; }
             if (bytes.length < 2048) { note('too-small'); continue; }
             if (bytes.length > maxBytes) { note('too-large'); continue; }
