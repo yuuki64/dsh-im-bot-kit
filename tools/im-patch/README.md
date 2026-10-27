@@ -1196,3 +1196,12 @@ node verify-build.mjs   # 重启前 exit 6(RUNTIME_NOT_RESTARTED)，完全退出
 - **配置**：`behavior.json → voiceAsr {enabled, model:'small', device:'cpu', timeoutMs}`；想更准可把 model 换 `medium`（更慢）。
 - **实测**：昨天的群语音「醒着呢?我是初同心悦…」（small + zhconv，简体）；20 个测试全绿；**需重启一次 DSH**。
 
+### 18.36 所有人可搜索 + 语音 tone + 表情限频 + 空 @ 回应 + yuika 守卫/超时（2026-10-27 第三十三轮）
+
+- **所有 bot 开放联网搜索**：`qq-bot-restrict` 从 `restrict({allow:[]})` 改成「探测已知全局工具 → 除保留名单外全部 deny」，保留 `web_search / web_fetch / read_page / x_search`（`ask_user_question / todo_write` 也保留）；`local-lite-restrict2` KEEP 同样加 4 个联网工具；`local-bot-guard` 放行这 4 个（不碰文件路径）→ yuika 也能搜天气/资料。profile 脚本已备份为 `*.bak-20261027-websearch`。**会话轮换版本 1→2**：重启后旧会话重建一次，工具面才会带上搜索。
+- **语音 tone（A 方案）**：`<dsh_im_voice tone="soft|loud|excited|calm|sad|angry">…</dsh_im_voice>`；gsv 无 emotion 参数，插件按 tone 调语速倍率（0.8~1.18）并对合成 WAV 的 PCM 做音量增益（0.62~1.75），再转 SILK；旧格式无 tone 不变。提示词已加用法。
+- **表情限频（代码兜底）**：`stickerFrequency` 默认 600 秒 1 张、每小时 2 张、距上次至少 3 条消息；超了静默跳过。实测近 48 小时 28 张、20:00 一小时 9 张，提示词管不住。
+- **空 @ 回应**：只 @ 不说话时不再回「目前支持文字、图片和文件消息。」，改为提示模型自然回应（“在呢/怎么啦”）。
+- **yuika 守卫/超时**：guard 对“工作区内但不存在”的文件直接回「文件不存在，不要继续尝试读取」；yuika 回复超时单独 240 秒（`replyTimeoutSeconds.byBot`，默认 600s 不变）。yuika 本地 27B 曾一轮 62 steps / 20 分钟。
+- 测试全绿（新增 4 项 tone 测试）；**需重启一次 DSH**（旧会话会一次性重建）。
+

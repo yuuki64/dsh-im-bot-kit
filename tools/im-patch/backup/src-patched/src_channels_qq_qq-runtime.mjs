@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+﻿import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -85,7 +85,18 @@ export class QqRuntime {
     this.#groupHistory = groupHistory;
     this.#accessPolicy = accessPolicy;
     this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'qq', logger });
-    this.#replyTimeoutMs = replyTimeoutMs;
+    // 本地补丁（2026-10-27）：回复超时可按 bot 覆盖（本地小模型 20 分钟一轮会卡死会话）。
+    {
+      let configuredSeconds = null;
+      try {
+        const timeoutConfig = readBehaviorConfig().replyTimeoutSeconds;
+        const seconds = Number(timeoutConfig?.byBot?.[config.botId] ?? timeoutConfig?.default);
+        if (Number.isFinite(seconds) && seconds > 0) configuredSeconds = seconds;
+      } catch {
+        configuredSeconds = null;
+      }
+      this.#replyTimeoutMs = configuredSeconds ? configuredSeconds * 1000 : replyTimeoutMs;
+    }
     this.#connectTimeoutMs = connectTimeoutMs;
     this.#createBot = createBot;
     this.#typingMiddleware = typingMiddleware;
@@ -296,9 +307,9 @@ export class QqRuntime {
     // （实测私聊还停在 standard preset，导致 session 工具报错、模型/强度和面板不一致）。
     try {
       const rotated = Number(this.#state.meta?.('sessionRotationVersion')) || 0;
-      if (rotated < 1) {
+      if (rotated < 2) {
         await this.#state.clearSessions();
-        await this.#state.setMeta('sessionRotationVersion', 1);
+        await this.#state.setMeta('sessionRotationVersion', 2);
         this.#logger.info?.('[dsh-im:qq] rotated legacy sessions once (preset/model consistency)');
       }
     } catch (error) {

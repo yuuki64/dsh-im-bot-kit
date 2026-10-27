@@ -352,7 +352,8 @@ function quotedImageName(name, index) {
 
 // 被逼急时可以连发多条语音：一次回复里最多 3 个 <dsh_im_voice> 标签，
 // 每条标签发一条语音（插件不合并、不改字）。
-const VOICE_TAG_PATTERN = /<dsh_im_voice>([\s\S]*?)<\/dsh_im_voice>/giu;
+// 本地补丁（2026-10-27）：支持 tone 属性控制语气/音量（soft/loud/excited/calm/sad/angry）。
+const VOICE_TAG_PATTERN = /<dsh_im_voice(?:\s+tone\s*=\s*["']?(soft|loud|excited|calm|sad|angry)["']?)?\s*>([\s\S]*?)<\/dsh_im_voice>/giu;
 const MAX_VOICE_MESSAGES = 3;
 // 本地补丁（2026-10-24）：被激将/被反复怼的常见说法 → 给模型加一句「这次优先用语音」的提示。
 const PROVOKE_PATTERN = /(?:这也不生气|不生气|没生气|生气了|你急了|急了|破防|绷不住|就这|阴阳|怼你|骂你|你敢|敢不敢|这也能忍|气死|服了|别怂|认怂)/u;
@@ -387,10 +388,14 @@ export function extractMediaIntent(text) {
   let rest = raw;
   let stickerQuery = null;
   const voiceTexts = [];
+  const voiceTones = [];
   // matchAll 内部克隆正则，不会打乱后面 replace 的状态。
   for (const match of rest.matchAll(VOICE_TAG_PATTERN)) {
-    const value = match[1].trim();
-    if (value && voiceTexts.length < MAX_VOICE_MESSAGES) voiceTexts.push(value);
+    const value = match[2].trim();
+    if (value && voiceTexts.length < MAX_VOICE_MESSAGES) {
+      voiceTexts.push(value);
+      voiceTones.push(match[1] ? match[1].toLowerCase() : null);
+    }
   }
   rest = rest.replace(VOICE_TAG_PATTERN, '');
   const stickerMatch = STICKER_TAG_PATTERN.exec(rest);
@@ -447,6 +452,7 @@ export function extractMediaIntent(text) {
     text: silent ? '' : trimmed,
     voiceText: voiceTexts[0] ?? null,
     voiceTexts,
+    voiceTones,
     stickerQuery,
     stickerTags,
     stickerReject,
@@ -1215,6 +1221,8 @@ export class QqHarnessBridge {
   #recentStickers = new Map();
   // 本地补丁（2026-10-25）：收藏任务的异步结果（用于把真实原因告诉模型）。
   #stickerCollectRuns = new Map();
+  // 本地补丁（2026-10-27）：表情发送频率（每会话；消息数 + 发送时间）。
+  #stickerStats = new Map();
   // 本地补丁：watch 模式（没人叫也先看一眼）的限速记录。
   #watchHistory = new Map();
   // 本地补丁（2026-10-25）：被连续开玩笑 → 先说明“后面不回了”，再短时间静默。
@@ -1728,6 +1736,32 @@ export class QqHarnessBridge {
     return allowed;
   }
 
+  /** 本地补丁（2026-10-27）：表情发送频率是否允许（按会话，代码兜底）。 */
+  #stickerAllowed(key) {
+    const config = readBehaviorConfig().stickerFrequency;
+    if (config?.enabled === false) return true;
+    const now = Date.now();
+    const state = this.#stickerStats.get(key) ?? { times: [], lastAt: 0, messagesSince: 0 };
+    const minInterval = Math.max(0, Number(config?.minIntervalSeconds) || 0) * 1000;
+    if (minInterval > 0 && now - (Number(state.lastAt) || 0) < minInterval) return false;
+    const maxPerHour = Math.max(0, Number(config?.maxPerHour) || 0);
+    if (maxPerHour > 0) {
+      const times = (Array.isArray(state.times) ? state.times : []).filter((at) => now - at < 60 * 60 * 1000);
+      if (times.length >= maxPerHour) return false;
+    }
+    const minMessages = Math.max(0, Number(config?.minMessagesSince) || 0);
+    if (minMessages > 0 && (Number(state.messagesSince) || 0) < minMessages) return false;
+    return true;
+  }
+
+  #noteStickerSent(key) {
+    const now = Date.now();
+    const state = this.#stickerStats.get(key) ?? { times: [], lastAt: 0, messagesSince: 0 };
+    const times = (Array.isArray(state.times) ? state.times : []).filter((at) => now - at < 60 * 60 * 1000);
+    times.push(now);
+    this.#stickerStats.set(key, { times, lastAt: now, messagesSince: 0 });
+  }
+
   /**
    * Local patch (2026-10-24): copy small GIF/WebP/PNG images from incoming
    * messages into the sticker library (behavior.json → stickerCollect).
@@ -2046,6 +2080,15 @@ export class QqHarnessBridge {
       at: now,
     });
     this.#recentChat.set(key, list.filter((entry) => now - entry.at <= 30 * 60 * 1000).slice(-40));
+    // 本地补丁（2026-10-27）：表情频率统计——该会话又来了几条消息。
+    {
+      const stats = this.#stickerStats.get(key) ?? { times: [], lastAt: 0, messagesSince: 0 };
+      stats.messagesSince = (Number(stats.messagesSince) || 0) + 1;
+      this.#stickerStats.set(key, stats);
+      while (this.#stickerStats.size > 200) {
+        this.#stickerStats.delete(this.#stickerStats.keys().next().value);
+      }
+    }
     // 本地补丁：习惯挖掘——统计每个人高频短语（零模型调用），够次数+跨天就晋升口头禅。
     const habitConfig = readBehaviorConfig().memory?.habits;
     if (habitConfig?.enabled !== false && message?.senderIsBot !== true) {
@@ -3727,9 +3770,15 @@ export class QqHarnessBridge {
     let batchSettled = batchSubmission === null;
     try {
       if (!text && !hasImages && !hasFiles && !hasReply) {
-        await this.#bot.sendText(target, t('目前支持文字、图片和文件消息。'));
-        await markMessageSeen();
-        return;
+        // 本地补丁（2026-10-27）：只 @ 一下、没有正文时交给模型自然回应，
+        // 不要回「目前支持文字、图片和文件消息」这种系统话术。
+        if (explicitTurn || watchMode) {
+          text = '[系统提示] 对方只@了你、没有说话内容：用一句很短、符合人设的话回应（比如“在呢”“怎么啦”），不要提支持格式。';
+        } else {
+          await this.#bot.sendText(target, t('目前支持文字、图片和文件消息。'));
+          await markMessageSeen();
+          return;
+        }
       }
       const command = text.toLowerCase();
       if (!hasImages && !hasFiles && command === '/help') {
@@ -3901,6 +3950,12 @@ export class QqHarnessBridge {
       // 本地补丁（2026-10-26）：私聊对象就是主人本人，别把他当外人/第三人。
       if (message?.kind === 'c2c' && isOwnerSender(message, this.#ownerUserOpenid)) {
         const instruction = '现在跟你私聊的人就是你的主人本人（不是陌生人、也不是群友）。不要把他当外人，也不要说什么“我是主人的宝宝”这种把主人当成第三人的话；主人说的亲密称呼按人设接。';
+        text = `${text}\n\n[系统提示] ${instruction}`;
+        content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
+      }
+      // 本地补丁（2026-10-27）：语音语气/音量控制（gsv 本身没有 emotion）。
+      {
+        const instruction = '发语音时可以用 tone 属性控制语气和音量：<dsh_im_voice tone="soft|loud|excited|calm|sad|angry">…</dsh_im_voice>（soft=轻声、loud=喊，其余按情绪选）；按语境挑一个，别每条都用。';
         text = `${text}\n\n[系统提示] ${instruction}`;
         content = appendPromptPart(content, `\n\n[系统提示] ${instruction}`);
       }
@@ -4187,6 +4242,7 @@ export class QqHarnessBridge {
             const { silk, durationMs, provider } = await synthesizeSpeechSilk(voiceText, {
               signal: this.#signal,
               settings: voiceSettings,
+              tone: mediaIntent.voiceTones?.[voiceIndex] ?? null,
             });
             await sendQqVoice(this.#bot, target, {
               bytes: silk,
@@ -4210,20 +4266,26 @@ export class QqHarnessBridge {
         }
       }
       if (mediaIntent.stickerQuery !== null) {
-        try {
-          const sticker = await pickSticker(mediaIntent.stickerQuery);
-          if (!sticker) throw new Error('sticker library is empty');
-          await sendQqImage(this.#bot, target, {
-            bytes: sticker.bytes,
-            fileName: sticker.name,
-            mediaType: sticker.mediaType,
-          }, { signal: this.#signal, timeoutMs: this.#fileUploadTimeoutMs });
-          this.#status.messagesReplied += 1;
-          this.#status.lastReplyAt = new Date().toISOString();
-          this.#logger.info?.(`[dsh-im:qq] sticker sent (${sticker.mediaType}, ${sticker.bytes.length} B)`);
-        } catch (error) {
-          this.#logger.warn?.('[dsh-im:qq] sticker failed:', error?.message ?? error);
-          stickerFailure = t('表情包没发出去：{reason}', { reason: error?.message ?? String(error) });
+        // 本地补丁（2026-10-27）：代码层频率限制——太频繁就这次不发，不报错。
+        if (!this.#stickerAllowed(key)) {
+          this.#logger.info?.('[dsh-im:qq] sticker skipped by frequency limiter');
+        } else {
+          try {
+            const sticker = await pickSticker(mediaIntent.stickerQuery);
+            if (!sticker) throw new Error('sticker library is empty');
+            await sendQqImage(this.#bot, target, {
+              bytes: sticker.bytes,
+              fileName: sticker.name,
+              mediaType: sticker.mediaType,
+            }, { signal: this.#signal, timeoutMs: this.#fileUploadTimeoutMs });
+            this.#noteStickerSent(key);
+            this.#status.messagesReplied += 1;
+            this.#status.lastReplyAt = new Date().toISOString();
+            this.#logger.info?.(`[dsh-im:qq] sticker sent (${sticker.mediaType}, ${sticker.bytes.length} B)`);
+          } catch (error) {
+            this.#logger.warn?.('[dsh-im:qq] sticker failed:', error?.message ?? error);
+            stickerFailure = t('表情包没发出去：{reason}', { reason: error?.message ?? String(error) });
+          }
         }
       }
       let textReceipt = null;

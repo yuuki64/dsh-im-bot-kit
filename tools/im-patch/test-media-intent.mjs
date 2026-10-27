@@ -30,6 +30,17 @@ try {
   check('group question: 大家刚才在说什么', isGroupQuestion('大家刚才在说什么') === true);
   check('group question: 普通消息不算', isGroupQuestion('我吃过了') === false);
 
+  // 2026-10-27：语音 tone 属性（语气/音量）。
+  {
+    const withTone = extractMediaIntent('<dsh_im_voice tone="soft">嗯…小声说</dsh_im_voice>');
+    check('voice tone: 解析 soft', withTone.voiceTones?.[0] === 'soft', JSON.stringify(withTone.voiceTones));
+    check('voice tone: 标签被剥掉', withTone.text === '', JSON.stringify(withTone.text));
+    const noTone = extractMediaIntent('<dsh_im_voice>第一句</dsh_im_voice>');
+    check('voice tone: 旧格式无 tone 仍是 null', noTone.voiceTones?.[0] === null);
+    const loud = extractMediaIntent('<dsh_im_voice tone="loud">喂——</dsh_im_voice>');
+    check('voice tone: loud 可用', loud.voiceTexts?.[0] === '喂——' && loud.voiceTones?.[0] === 'loud');
+  }
+
   // 2026-10-25：线程窗口相关纯函数。
   check('nudge: 你怎么不回蓝莓', isNudgeMessage('你怎么不回蓝莓') === true);
   check('nudge: 为什么不理人家', isNudgeMessage('为什么不理人家') === true);
