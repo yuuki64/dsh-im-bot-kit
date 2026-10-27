@@ -319,12 +319,55 @@ function friendlyTtsError(error, provider) {
 
 /**
  * Synthesize speech into a WAV buffer with the configured voice.
+ * 本地补丁（2026-10-27）：支持 tone（soft/loud/excited/calm/sad/angry），
+ * 用语速倍率 + PCM 增益实现“喊/轻声/情绪”，gsv 本身没有 emotion 参数。
  * @returns {Promise<{wav: Buffer, settings: object, provider: string}>}
  */
+const VOICE_TONE_PROFILES = Object.freeze({
+  soft: Object.freeze({ speed: 0.86, gain: 0.62 }),
+  loud: Object.freeze({ speed: 1.08, gain: 1.75 }),
+  excited: Object.freeze({ speed: 1.16, gain: 1.4 }),
+  calm: Object.freeze({ speed: 0.92, gain: 0.9 }),
+  sad: Object.freeze({ speed: 0.8, gain: 0.85 }),
+  angry: Object.freeze({ speed: 1.18, gain: 1.55 }),
+});
+
+export function normalizeVoiceTone(value) {
+  const id = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return Object.hasOwn(VOICE_TONE_PROFILES, id) ? id : null;
+}
+
+function applyWavGain(wav, gain) {
+  if (!Number.isFinite(gain) || Math.abs(gain - 1) < 0.01) return wav;
+  try {
+    const buffer = Buffer.from(wav);
+    let offset = 12;
+    while (offset + 8 <= buffer.length) {
+      const id = buffer.toString('ascii', offset, offset + 4);
+      const size = buffer.readUInt32LE(offset + 4);
+      if (id === 'data') {
+        const start = offset + 8;
+        const end = Math.min(buffer.length, start + size);
+        for (let at = start; at + 1 < end; at += 2) {
+          const sample = buffer.readInt16LE(at);
+          const scaled = Math.max(-32768, Math.min(32767, Math.round(sample * gain)));
+          buffer.writeInt16LE(scaled, at);
+        }
+        return buffer;
+      }
+      offset += 8 + size + (size % 2);
+    }
+    return wav;
+  } catch {
+    return wav;
+  }
+}
+
 export async function synthesizeSpeechWav(text, {
   timeoutMs = DEFAULT_TTS_TIMEOUT_MS,
   signal,
   settings,
+  tone = null,
 } = {}) {
   const say = typeof text === 'string' ? text.trim() : '';
   if (!say) {
@@ -338,6 +381,11 @@ export async function synthesizeSpeechWav(text, {
     );
   }
   const current = settings ?? await readVoiceSettings();
+  const toneId = normalizeVoiceTone(tone);
+  const profile = toneId ? VOICE_TONE_PROFILES[toneId] : null;
+  const speedFactor = profile?.speed ?? 1;
+  const gain = profile?.gain ?? 1;
+  const withTone = (wav) => applyWavGain(wav, gain);
   let lastError = null;
   // GPU sidecar (F5-TTS) gives the closest character timbre; Kokoro is the
   // offline fallback, Windows voices the last resort.
@@ -346,11 +394,11 @@ export async function synthesizeSpeechWav(text, {
       signal?.throwIfAborted();
       const result = await synthesizeGsvWav(say, {
         character: current.character,
-        speed: current.speed,
+        speed: (Number(current.speed) || 1) * speedFactor,
         ...(current.endpoint ? { endpoint: current.endpoint } : {}),
       });
       signal?.throwIfAborted();
-      return { wav: result.wav, settings: current, provider: 'gsv' };
+      return { wav: withTone(result.wav), settings: current, provider: 'gsv', tone: toneId };
     } catch (error) {
       if (signal?.aborted) throw error;
       lastError = error;
@@ -361,11 +409,11 @@ export async function synthesizeSpeechWav(text, {
       signal?.throwIfAborted();
       const result = await synthesizeGpuWav(say, {
         character: current.character,
-        speed: current.speed,
+        speed: (Number(current.speed) || 1) * speedFactor,
         steps: current.steps,
       });
       signal?.throwIfAborted();
-      return { wav: result.wav, settings: current, provider: 'f5' };
+      return { wav: withTone(result.wav), settings: current, provider: 'f5', tone: toneId };
     } catch (error) {
       if (signal?.aborted) throw error;
       lastError = error;
@@ -376,10 +424,10 @@ export async function synthesizeSpeechWav(text, {
       signal?.throwIfAborted();
       const result = await synthesizeKokoroWav(say, {
         voice: current.voice,
-        speed: current.speed,
+        speed: (Number(current.speed) || 1) * speedFactor,
       });
       signal?.throwIfAborted();
-      return { wav: result.wav, settings: current, provider: 'kokoro' };
+      return { wav: withTone(result.wav), settings: current, provider: 'kokoro', tone: toneId };
     } catch (error) {
       if (signal?.aborted) throw error;
       lastError = error;
@@ -387,7 +435,10 @@ export async function synthesizeSpeechWav(text, {
   }
   const directory = await mkdtemp(join(tmpdir(), 'dsh-tts-'));
   const wavPath = join(directory, 'voice.wav');
-  const ssml = buildSsml(say, current);
+  const ssmlSettings = speedFactor === 1
+    ? current
+    : { ...current, rate: Math.max(-30, Math.min(30, (Number(current.rate) || 0) + Math.round((speedFactor - 1) * 100))) };
+  const ssml = buildSsml(say, ssmlSettings);
   const env = {
     DSH_TTS_VOICE: current.voice,
     DSH_TTS_SSML_B64: Buffer.from(ssml, 'utf8').toString('base64'),
@@ -401,7 +452,7 @@ export async function synthesizeSpeechWav(text, {
           env, timeoutMs, signal,
         });
         const wav = await readFile(wavPath);
-        if (wav.length > 44) return { wav, settings: current, provider };
+        if (wav.length > 44) return { wav: withTone(wav), settings: current, provider, tone: toneId };
         lastError = new VoiceError('voice-tts-empty', `${provider} produced an empty wav`,
           '语音合成没有出声，可能本机缺少语音包。');
       } catch (error) {
@@ -468,8 +519,8 @@ export async function encodeWavToSilk(wav) {
  * One-shot: text -> SILK buffer ready for `bot.sendVoice`.
  * @returns {Promise<{silk: Buffer, durationMs: number, wavBytes: number, provider: string, settings: object}>}
  */
-export async function synthesizeSpeechSilk(text, { timeoutMs, signal, settings } = {}) {
-  const spoken = await synthesizeSpeechWav(text, { timeoutMs, signal, settings });
+export async function synthesizeSpeechSilk(text, { timeoutMs, signal, settings, tone = null } = {}) {
+  const spoken = await synthesizeSpeechWav(text, { timeoutMs, signal, settings, tone });
   const { silk, durationMs } = await encodeWavToSilk(spoken.wav);
   return {
     silk,
@@ -477,6 +528,7 @@ export async function synthesizeSpeechSilk(text, { timeoutMs, signal, settings }
     wavBytes: spoken.wav.length,
     provider: spoken.provider,
     settings: spoken.settings,
+    tone: spoken.tone ?? null,
   };
 }
 

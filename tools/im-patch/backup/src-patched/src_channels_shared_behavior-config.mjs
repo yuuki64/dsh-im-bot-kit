@@ -171,6 +171,18 @@ export const BEHAVIOR_DEFAULTS = Object.freeze({
     warnAfter: 2,
     muteSeconds: 180,
   }),
+  // 2026-10-27：表情发送频率限制（按会话；代码层兜底，不依赖模型自觉）。
+  stickerFrequency: Object.freeze({
+    enabled: true,
+    minIntervalSeconds: 600,
+    maxPerHour: 2,
+    minMessagesSince: 3,
+  }),
+  // 2026-10-27：单个 bot 的回复超时（秒）；默认 600，可按 bot 覆盖（本地小模型建议更短）。
+  replyTimeoutSeconds: Object.freeze({
+    default: 600,
+    byBot: Object.freeze({}),
+  }),
   // 2026-10-26：按渠道覆盖模型/思考强度；null 或缺省 = 继承 bot 设置面板里的值。
   channelModels: Object.freeze({
     direct: Object.freeze({ reasoningEffort: null }),
