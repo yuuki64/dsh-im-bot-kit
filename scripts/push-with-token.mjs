@@ -3,7 +3,8 @@
 //
 //   node scripts/push-with-token.mjs [branch]
 //
-// Token lookup: GITHUB_TOKEN / GH_TOKEN env, else `.github-token` next to the repo root.
+// Token lookup: GITHUB_TOKEN / GH_TOKEN env, else `~/.dsh/secrets/github-token-im-bot-kit`
+// (preferred, outside the repo), else legacy `.github-token` next to the repo root.
 // Network: uses HTTPS_PROXY / HTTP_PROXY if set; otherwise probes common local proxy
 // ports (127.0.0.1:7897 / 7890 / 1080) so pushes work on networks where github.com
 // is only reachable through a proxy.
@@ -13,6 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,8 +27,12 @@ const git = (args, env) => execFileSync('git', ['-C', repoRoot, ...args], { enco
 function readToken() {
   const fromEnv = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   if (fromEnv && fromEnv.trim()) return fromEnv.trim();
-  const file = join(repoRoot, '.github-token');
-  if (existsSync(file)) {
+  // Preferred: secrets live OUTSIDE the repo so a publish/zip/-f add can never leak them.
+  const secretFile = join(homedir(), '.dsh', 'secrets', 'github-token-im-bot-kit');
+  // Legacy fallback for old checkouts.
+  const legacyFile = join(repoRoot, '.github-token');
+  for (const file of [secretFile, legacyFile]) {
+    if (!existsSync(file)) continue;
     const value = readFileSync(file, 'utf8').trim();
     if (value) return value;
   }
@@ -60,7 +66,7 @@ function probeProxy() {
 
 const token = readToken();
 if (!token) {
-  console.error('没有 token：设置 GITHUB_TOKEN/GH_TOKEN，或把 token 单行写进 ' + join(repoRoot, '.github-token'));
+  console.error('没有 token：设置 GITHUB_TOKEN/GH_TOKEN，或把 token 单行写进 ' + join(homedir(), '.dsh', 'secrets', 'github-token-im-bot-kit'));
   process.exit(2);
 }
 

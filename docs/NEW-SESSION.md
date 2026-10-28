@@ -2,10 +2,10 @@
 
 新开一个 DSH 会话继续维护时，把下面「复制这段」整段粘进去，末尾补一句具体任务就行。
 **不需要贴 token、日志、截图**——文档和命令都在本机，让新会话自己读。
-凭据只放本机（例如 `<WORKSPACE>/im-bot-kit/.github-token`，已在 `.gitignore` 里），不要进聊天。
+凭据只放本机、且**放在仓库外**（`~/.dsh/secrets/github-token-im-bot-kit`），不要进聊天。
 
 **网络与推送**：本机直连 `github.com` 经常失败，需要代理（实测 `http://127.0.0.1:7897` 可用）；
-推送统一用 `node scripts/push-with-token.mjs` —— 它从 `.github-token` 读 token、自动探测本地代理、
+推送统一用 `node scripts/push-with-token.mjs` —— 它从 `~/.dsh/secrets/github-token-im-bot-kit`（兼容旧的本仓库根目录 `.github-token`）读 token、自动探测本地代理、
 只在本次运行里把 token 放进临时 remote URL，结束时还原成纯 URL，输出自动脱敏。
 
 ## 复制这段
