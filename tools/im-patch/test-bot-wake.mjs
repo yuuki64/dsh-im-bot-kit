@@ -23,9 +23,15 @@ function patternFor(botId) {
   return bridge.nameMentionPatternForNames(profile ? [profile.name, ...profile.aliases] : []);
 }
 
-const hiroPattern = patternFor('qq_000000000000000000000001');
-const yuriPattern = patternFor('qq_000000000000000000000002');
-const plainPattern = patternFor('qq_000000000000000000000003');
+// 真实 botId 不进仓库：用环境变量传
+//   $env:BOT_ID_HIRO='qq_…'; $env:BOT_ID_YURI='qq_…'; node test-bot-wake.mjs
+if (!process.env.BOT_ID_HIRO || !process.env.BOT_ID_YURI) {
+  console.log('skip: 设置 BOT_ID_HIRO / BOT_ID_YURI 后再跑（真实 botId 不落仓库）');
+  process.exit(0);
+}
+const hiroPattern = patternFor(process.env.BOT_ID_HIRO);
+const yuriPattern = patternFor(process.env.BOT_ID_YURI);
+const plainPattern = patternFor('qq_plain_example');
 
 check('hiro 有唤醒匹配器', Boolean(hiroPattern), hiroPattern ? String(hiroPattern) : 'null');
 for (const text of ['hiro说句话', '椎名 在吗', '希罗你妹妹是谁', '二阶堂希罗出来', 'HIRO 你好']) {

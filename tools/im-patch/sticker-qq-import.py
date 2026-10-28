@@ -7,9 +7,11 @@ import json
 import os
 import shutil
 
-ORI = r"<QQ_DATA_ROOT>\qq\Tencent Files\<QQ_NUMBER>\nt_qq\nt_data\Emoji\personal_emoji\Ori"
-THUMB = r"<QQ_DATA_ROOT>\qq\Tencent Files\<QQ_NUMBER>\nt_qq\nt_data\Emoji\personal_emoji\Thumb"
-OUT = r"D:\project for deepseekharness\default-workspace\tools\im-patch\_sticker-import"
+# 路径不写死：用环境变量传你自己的（QQ_DATA 指向 "Tencent Files\<你的QQ号>"）
+QQ_DATA = os.environ.get("QQ_DATA", r"C:\Users\<you>\Documents\Tencent Files\<QQ号>")
+ORI = os.path.join(QQ_DATA, r"nt_qq\nt_data\Emoji\personal_emoji\Ori")
+THUMB = os.path.join(QQ_DATA, r"nt_qq\nt_data\Emoji\personal_emoji\Thumb")
+OUT = os.environ.get("STICKER_IMPORT_OUT", r".\_sticker-import")
 LIMIT = 500
 MAX_BYTES = 3 * 1024 * 1024 - 4096
 BATCH_SIZE = 34

@@ -6,6 +6,8 @@ tools/im-patch/backup/lib-index.js.orig
 # full bundle backups are big (9 MB each) and not needed to rebuild
 tools/im-patch/backup/lib-index.js.*
 tools/im-patch/backup/pre-apply-*/
+# 运行时配置备份（含真实 botId / openid / 会话 key），只在本地留存
+tools/im-patch/backup/*.bak-*
 tools/im-patch/*.tgz
 tools/im-patch/package-lock.json.orig
 # 本机构建证据（含绝对路径；每台机器用 node tools/im-patch/build-im.mjs 自己生成）
@@ -24,6 +26,8 @@ weights/
 characters/
 dataset/
 logs/
+*.db
+*.sqlite
 
 # never commit credentials
 .github-token
