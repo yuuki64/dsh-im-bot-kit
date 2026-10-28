@@ -10,6 +10,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,8 +25,9 @@ function run(args) {
 function pickToken() {
   const env = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   if (env?.trim()) return env.trim();
-  const file = join(repoRoot, '.github-token');
-  if (existsSync(file)) {
+  // Secrets live outside the repo; the legacy in-repo file is still honoured.
+  for (const file of [join(homedir(), '.dsh', 'secrets', 'github-token-im-bot-kit'), join(repoRoot, '.github-token')]) {
+    if (!existsSync(file)) continue;
     const value = readFileSync(file, 'utf8').trim();
     if (value) return value;
   }

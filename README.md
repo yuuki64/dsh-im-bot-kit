@@ -17,7 +17,7 @@
 
 1. **权威副本在本地，不在 GitHub**：真正生效的是 `<WORKSPACE>\tools\im-patch` + 已安装插件；本仓库只是镜像，可能落后。排障一律以本地为准。
 2. **改完必须重新打包 + 重启 DSH**：`node tools/im-patch/apply.mjs`（或 `build-im.mjs`）→ 完全退出 DSH 再打开。重启前不要说“已生效”。
-3. **推送要代理、token 只放本地**：本机直连 `github.com` 常失败，用 `node scripts/push-with-token.mjs`（自动探测本地代理、从 `.github-token` 读 token、用完把 remote 还原成纯 URL、输出脱敏）。
+3. **推送要代理、token 只放本地**：本机直连 `github.com` 常失败，用 `node scripts/push-with-token.mjs`（自动探测本地代理、从 `~/.dsh/secrets/github-token-im-bot-kit` 读 token、用完把 remote 还原成纯 URL、输出脱敏）。
 
 **当前状态唯一入口：[docs/CURRENT-STATE.md](docs/CURRENT-STATE.md)** —— 适配版本、权威位置、构建/恢复入口、功能限制、已验证与未验证项、最后核验日期。里面的版本号与文件数由 `node tools/im-patch/status.mjs --doc docs/CURRENT-STATE.md --write` 从代码清单与实测生成，不要手改；`tools/im-patch/README.md` 是各轮改动的时间线记录，**不代表现状**。
 
@@ -54,7 +54,7 @@ docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
 docs/NEW-SESSION.md      新会话开场白（复制即用，接手本项目）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
 scripts/check-mirror-sync.mjs 只读核对「镜像 == 本机权威补丁目录」（带 --self-test 负例）
-scripts/push-with-token.mjs 带 token + 本地代理推送（token 放 .github-token，不进 git 配置）
+scripts/push-with-token.mjs 带 token + 本地代理推送（token 放仓库外 `~/.dsh/secrets/github-token-im-bot-kit`，不进 git 配置）
 ```
 
 ## 新对话怎么接手

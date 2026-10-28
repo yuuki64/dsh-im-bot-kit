@@ -205,7 +205,7 @@ cd <WORKSPACE>\im-bot-kit
 # 1. 打版本标签（示例 v0.2）
 git tag -a v0.2 -m "v0.2"
 
-# 2. 推提交 + 标签（token 放仓库根的 .github-token，已被 gitignore；脚本自动探测本地代理）
+# 2. 推提交 + 标签（token 放仓库外 `~/.dsh/secrets/github-token-im-bot-kit`；脚本自动探测本地代理）
 node scripts/push-with-token.mjs main --tags
 
 # 3. 建 release：GitHub 仓库页 → Releases → Create a new release → 选 v0.2 → 写正文 → Publish
