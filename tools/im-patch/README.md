@@ -162,7 +162,7 @@ Copy-Item "<WORKSPACE>\tools\im-patch\pristine\package\src\*" `
 
 ## 5. 使用与已知限制
 
-- 语音：私聊 `/voice 你好`（主人 openid `00000000000000000000000000000001`）；群里要先 @ 机器人，且只对主人生效。
+- 语音：私聊 `/voice 你好`（主人 openid `<MASTER_OPENID>`，换成你自己的）；群里要先 @ 机器人，且只对主人生效。
 - 引用图：先发图，再回复那张图提问；引用超过 6 小时/48 张之前的图会退回"只有文件名"。
 - 仍然是限制的部分：
   - 单张图给模型的副本上限 5 MB（GIF 不能压）、总量 20 MB —— 想放宽去「通用设置 → 附件 → 图片输入」。
@@ -619,8 +619,8 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 
 ### 17.9 希罗人设卡 + 额外音色按需启动（2026-10-23）
 
-**人设卡**：主人最初给的完整卡（`C:\Users\yuuki\OneDrive\桌面\希罗人设卡.md`）动作/心理描写多、回复偏长；2026-10-23 按主人要求换成**精简对话版**（约 900 字符）：
-- 安装位置：`integrations\dsh-im\bots\qq_1a3b9ed…\persona.md`；同时 `integrations\dsh-im\personas\希罗.md` 存一份可复用；
+**人设卡**：主人最初给的完整卡（`<DESKTOP>\希罗人设卡.md`）动作/心理描写多、回复偏长；2026-10-23 按主人要求换成**精简对话版**（约 900 字符）：
+- 安装位置：`integrations\dsh-im\bots\<botId>\persona.md`；同时 `integrations\dsh-im\personas\希罗.md` 存一份可复用；
 - 卡首段硬约束：**只输出角色说的话**，不写动作/表情/心理/旁白、不用括号内心戏；一般 1~3 句、最多 5 句、不写小作文；
 - 保留：优等生 + 正义感 + 冷静有距离 + 责任感 + 一本正经的较真、原作初期防剧透、yuri 是妹妹；
 - 原长卡仍在 OneDrive 桌面，需要时可换回（`bot-profile.mjs persona <botId> …` 或直接覆盖文件，下一句消息即生效）。
@@ -661,7 +661,7 @@ const NAME_MENTION_PATTERN = /(?:^|[^a-z0-9_])yuri(?:$|[^a-z0-9_])|小鲸鱼|dee
 最初改成每 2~4 条一张，主人觉得太密；改成 **平均每 15~20 条回复带一张**（`AGENTS.md` + yuri 人设 `persona.md`/`小鲸鱼.md` + hiro 人设）。纯提示词，立即生效。
 ### 17.14 主人称呼注入（2026-10-23，修「椎名认不得主人」）
 
-原因：身份块只注入了主人的 **openid**，模型不知道主人叫什么，所以椎名问「还没告诉我该怎么称呼」。主人 openid 本身是对的（群里实测 sender_id `9D0C02EB…` = 配置 owner，yuri 侧 `A051E01D…` 一致）。
+原因：身份块只注入了主人的 **openid**，模型不知道主人叫什么，所以椎名问「还没告诉我该怎么称呼」。主人 openid 本身是对的（群里实测 sender_id 与配置的 owner openid 一致）。
 
 修复：`bot.json` 新增 `ownerName`（`bot-profile.mjs name <botId> --owner-name yuuki`），身份块升级为：
 - 「这个机器人的主人是 yuuki，openid：…」

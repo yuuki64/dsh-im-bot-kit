@@ -98,13 +98,13 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 
 - 目录约定：`<DSH_HOME>\integrations\dsh-im\bots\<botId>\` 放 `bot.json`（名字 + 别名 = 唤醒词 + 主人 openid）、`persona.md`、`voice.json`；**没有这个目录就走全局**，所以老机器人行为不变（yuri 就是走全局）。
 - 加新机器人：`node tools/im-patch/bot-profile.mjs init <botId> --name 名字 --aliases 名字,别名2 --persona <人设卡> --voice gsv --character <角色>`，然后 `node tools/im-patch/bot-profile.mjs check`。改配置不用重启。
-- 当前分布：`qq_9cc39e2…`（yuri）= 全局小鲸鱼人设 + `gsv/dafeiyu`，别名 yuri/小鲸鱼/DeepSeek；`qq_1a3b9ed…` = 名字「椎名」/别名 椎名、希罗、二阶堂希罗、**hiro**，人设暂用 `傲娇助手` 卡，音色 `gsv/shiro`（**endpoint http://127.0.0.1:17864**）；`qq_a9a550…` = 未配置，走全局。
+- 当前分布：`<botId-A>`（yuri）= 全局小鲸鱼人设 + 自己的音色，别名 yuri/小鲸鱼/DeepSeek；`<botId-B>` = 名字「椎名」/别名 椎名、希罗、二阶堂希罗、**hiro**，人设暂用 `傲娇助手` 卡，独立音色（**endpoint http://127.0.0.1:17864**）；`<botId-C>` = 未配置，走全局。
 - **希罗音色现状**：17864 跑 **v2ProPlus 微调**（用户提供的 `hiro-e10.ckpt` + `hiro_e8_s2184.pth`，依赖 sv 说话人模型已补齐），与 17862（大肥鱼微调）并存。实测同句中位 f0：大肥鱼 263.4 Hz / 希罗微调 207.8 Hz；微调实例 15 字约 2.8 秒。样本 `D:\tools\gpt-sovits\samples\hiro-compare-{dafeiyu,hiro-finetuned}.wav`。重启后用 `D:\tools\gpt-sovits\start-hiro-tts.bat` 拉起（首次推理有几十秒 CUDA 图编译）。
-- **未完成**：无（v2ProPlus 微调已接通）；如需换参考音/重训，数据集仍在 `C:\Users\yuuki\OneDrive\桌面\hiro`。
+- **未完成**：无（v2ProPlus 微调已接通）；如需换参考音/重训，训练数据自备（仓库不含任何音频数据）。
 - **姐妹关系**：写在两个 bot 的 `bot.json` 的 `note` 里（随 `<dsh_im_identity>` 注入），不写进人设卡——yuri 知道 hiro 是亲姐姐，hiro 知道 yuri 是亲妹妹。
 - 微信：仍只有全局人设/音色（微信通道没有多 bot 概念，本轮不动）。
 - **唤醒词（2026-10-23 修）**：群里不 @ 也能按名字唤醒，匹配器按 `bots/<botId>/bot.json` 的 name+aliases 生成（ASCII 整词、中文子串）。hiro 认 `椎名/希罗/二阶堂希罗/hiro`，yuri 认 `yuri/小鲸鱼/DeepSeek/大肥鱼`；有 botId 但没 profile 的机器人只认 @。回归 `node tools/im-patch/test-bot-wake.mjs`。
-- **hiro 人设卡（2026-10-23）**：已换成**精简对话版**（约 900 字符，装到 `bots/qq_1a3b9ed…/persona.md`，另存 `personas/希罗.md`）：只输出角色说的话、不写动作/心理/旁白、1~3 句、不写小作文；保留优等生/正义感/防剧透/yuri 是妹妹。原长卡仍在 OneDrive 桌面，可换回。
+- **hiro 人设卡（2026-10-23）**：已换成**精简对话版**（约 900 字符，装到 `bots/<botId>/persona.md`，另存 `personas/希罗.md`）：只输出角色说的话、不写动作/心理/旁白、1~3 句、不写小作文；保留优等生/正义感/防剧透/yuri 是妹妹。原长卡仍在本地 OneDrive 桌面，可换回。
 - **额外音色按需启动（2026-10-23）**：`D:\tools\gpt-sovits\instances.json` 注册端点（17864 → `tts_infer_hiro.yaml`）。插件只在该 bot 真正发语音时才 spawn 对应实例，重启后不预占显存；实测冷启动约 26 秒。当前 17864 为停止状态。
 - **推理等级（2026-10-23）**：所有 IM 会话默认 **low**（`workspace-session.mjs` 在绑定后执行一次 `/reasoning low`；群聊跟随 `/effort` 上限，默认也 low）。每进程每会话一次，重启后旧会话也会在首条消息落回 low。
 - **表情包频率（2026-10-23）**：`AGENTS.md` + 两个 bot 人设卡都加了「不用等开口、平均每 2~4 条回复带一张、情绪明显优先、不连续两条」；表情库 465 个文件。纯提示词，立即生效。

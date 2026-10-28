@@ -9,7 +9,7 @@
 |---|---|
 | 宿主 | DSH（desktop profile，`0.2.1-rc.2`） |
 | 通道插件 | `@xmanrui/dsh-im 5.2.0` + 本地补丁集（31 个文件，见 `tools/im-patch/manifest.mjs`） |
-| 机器人 | yuri（appId 1000000001）、椎名/希罗（appId 1000000002） |
+| 机器人 | 两个（示例名 yuri / 椎名），各自独立的 appId <APP_ID>（不写进仓库） |
 | 会话工作区 | 每个 bot 独立 workspace（`integrations/dsh-qq/workspaces.json`） |
 | 工具面 | 轻量 preset `qq-bot`（工具 schema 109,722 → ~1,200 tokens，-98.9%） |
 | 配置热加载 | `behavior.json`（mtime 缓存，改完即生效）；人设/AGENTS 也热加载 |
