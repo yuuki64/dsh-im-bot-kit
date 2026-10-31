@@ -130,6 +130,19 @@ import {
   writeGroupReasoningCeiling,
 } from '../shared/group-reasoning.mjs';
 
+// 本地补丁（2026-10-27）：replyChunking 支持按 bot 覆盖。
+// behavior.json 里写 replyChunking.bots.<botId> = { enabled: false } 时只影响那个 bot，
+// 其他 bot 继续用全局分段设置（不动全局，避免误伤）。
+function replyChunkingFor(botId) {
+  const chunking = readBehaviorConfig().replyChunking;
+  if (!chunking || typeof chunking !== 'object') return null;
+  const bots = chunking.bots;
+  const override = botId && bots && typeof bots === 'object' && bots[botId] && typeof bots[botId] === 'object'
+    ? bots[botId]
+    : null;
+  return override ? { ...chunking, ...override } : chunking;
+}
+
 function interactionResolvedText() {
   return t('这个问题已在其他客户端处理，无需再次回答。');
 }
@@ -3537,7 +3550,7 @@ export class QqHarnessBridge {
   }
 
   async #sendVideoText(message, key, display) {
-    const chunking = readBehaviorConfig().replyChunking;
+    const chunking = replyChunkingFor(this.#botId);
     const segments = chunking?.enabled
       ? splitChatSegments(display, {
         maxChars: chunking.maxChars,
@@ -4315,7 +4328,7 @@ export class QqHarnessBridge {
           // Local patch (2026-10-24): chat replies are delivered one short
           // message at a time instead of one long bubble. Long paragraphs,
           // code blocks, tables and URLs still take the normal path.
-          const chunking = readBehaviorConfig().replyChunking;
+          const chunking = replyChunkingFor(this.#botId);
           const chatSegments = chunking?.enabled
             ? splitChatSegments(displayAnswer, {
               maxChars: chunking.maxChars,
