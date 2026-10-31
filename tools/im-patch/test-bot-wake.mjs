@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { localValue } from './local-config.mjs';
+
 const pluginRoot = join(homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', '@xmanrui', 'dsh-im');
 const bridge = await import(pathToFileURL(join(pluginRoot, 'src', 'channels', 'qq', 'qq-bridge.mjs')).href);
 const persona = await import(pathToFileURL(join(pluginRoot, 'src', 'channels', 'shared', 'persona.mjs')).href);
@@ -23,14 +25,17 @@ function patternFor(botId) {
   return bridge.nameMentionPatternForNames(profile ? [profile.name, ...profile.aliases] : []);
 }
 
-// 真实 botId 不进仓库：用环境变量传
+// 真实 botId 不进仓库：环境变量优先，其次仓库根的 config.local.json（已 gitignore）。
 //   $env:BOT_ID_HIRO='qq_…'; $env:BOT_ID_YURI='qq_…'; node test-bot-wake.mjs
-if (!process.env.BOT_ID_HIRO || !process.env.BOT_ID_YURI) {
-  console.log('skip: 设置 BOT_ID_HIRO / BOT_ID_YURI 后再跑（真实 botId 不落仓库）');
+//   （或者把两个值写进 config.local.json 的 botIdHiro / botIdYuri）
+const botIdHiro = localValue('botIdHiro', 'BOT_ID_HIRO');
+const botIdYuri = localValue('botIdYuri', 'BOT_ID_YURI');
+if (!botIdHiro || !botIdYuri) {
+  console.log('skip: 先在 config.local.json 写 botIdHiro / botIdYuri（或设同名环境变量）再跑');
   process.exit(0);
 }
-const hiroPattern = patternFor(process.env.BOT_ID_HIRO);
-const yuriPattern = patternFor(process.env.BOT_ID_YURI);
+const hiroPattern = patternFor(botIdHiro);
+const yuriPattern = patternFor(botIdYuri);
 const plainPattern = patternFor('qq_plain_example');
 
 check('hiro 有唤醒匹配器', Boolean(hiroPattern), hiroPattern ? String(hiroPattern) : 'null');

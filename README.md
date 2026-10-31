@@ -15,11 +15,11 @@
 
 ## 接手必读（新会话 / 换机器，先看这三条 + 一个入口）
 
-1. **权威副本在本地，不在 GitHub**：真正生效的是 `<WORKSPACE>\tools\im-patch` + 已安装插件；本仓库只是镜像，可能落后。排障一律以本地为准。
+1. **GitHub 是唯一真源**：本地 clone 就是工作副本，改完直接推。个人值（botId、QQ 数据目录、主人身份标识）只写仓库根的 `config.local.json`，该文件已被忽略、永远不会提交。
 2. **改完必须重新打包 + 重启 DSH**：`node tools/im-patch/apply.mjs`（或 `build-im.mjs`）→ 完全退出 DSH 再打开。重启前不要说“已生效”。
 3. **推送要代理、token 只放本地**：本机直连 `github.com` 常失败，用 `node scripts/push-with-token.mjs`（自动探测本地代理、从 `~/.dsh/secrets/github-token-im-bot-kit` 读 token、用完把 remote 还原成纯 URL、输出脱敏）。
 
-**当前状态唯一入口：[docs/CURRENT-STATE.md](docs/CURRENT-STATE.md)** —— 适配版本、权威位置、构建/恢复入口、功能限制、已验证与未验证项、最后核验日期。里面的版本号与文件数由 `node tools/im-patch/status.mjs --doc docs/CURRENT-STATE.md --write` 从代码清单与实测生成，不要手改；`tools/im-patch/README.md` 是各轮改动的时间线记录，**不代表现状**。
+**当前状态唯一入口：[docs/CURRENT-STATE.md](docs/CURRENT-STATE.md)** —— 适配版本、构建/恢复入口、功能限制、已验证与未验证项、最后核验日期。里面的版本号与文件数由 `node tools/im-patch/status.mjs --doc docs/CURRENT-STATE.md --write` 从代码清单与实测生成，不要手改；`tools/im-patch/README.md` 是各轮改动的时间线记录，**不代表现状**。
 
 新会话不想交代背景，直接把 [docs/NEW-SESSION.md](docs/NEW-SESSION.md) 里的开场白粘过去，末尾补一句任务即可。
 
@@ -32,6 +32,7 @@ tools/im-patch/          插件补丁集
   apply.mjs              按清单把 backup/src-patched 还原进已安装插件并重建
   verify-build.mjs       四道门核对：补丁清单 / 源码已同步 / 产物已构建 / 进程已重启
   status.mjs             一条命令看当前状态，并生成 CURRENT-STATE.md 的自动数字块
+  local-config.mjs       读本地个人值的唯一入口（环境变量优先，其次 config.local.json）
   test-weixin-outbound-tags.mjs 微信出站标签清理回归（语音转文本、表情丢弃、不空投递）
   backup/src-patched/    修改后的插件源码（22 个文件，清单见 manifest.mjs）
   im-pause.mjs           全局暂停/恢复 IM（paused 标记，断开所有通道）
@@ -49,17 +50,17 @@ configs/
   stickers.example.json  表情库目录配置样例
   persona.example.md     当前生效人设
   personas/              人设卡（傲娇助手 / 小鲸鱼 / 说明）
+config.local.example.json 个人值样例（botId / QQ 数据目录 / 主人身份标识；复制成 config.local.json）
 docs/CURRENT-STATE.md    当前状态唯一入口（事实，不是历史）
 docs/MAINTENANCE.md      维护手册（升级、回滚、排错）
 docs/NEW-SESSION.md      新会话开场白（复制即用，接手本项目）
 scripts/rebuild.ps1      一键：还原补丁 → 重新打包 → 校验
-scripts/check-mirror-sync.mjs 只读核对「镜像 == 本机权威补丁目录」（带 --self-test 负例）
 scripts/push-with-token.mjs 带 token + 本地代理推送（token 放仓库外 `~/.dsh/secrets/github-token-im-bot-kit`，不进 git 配置）
 ```
 
 ## 新对话怎么接手
 
-本仓库只是**镜像**，真正的权威副本在 `<WORKSPACE>\tools\im-patch`（以及实际安装的插件）。新开对话时让它按这个顺序读：
+仓库就是唯一真源，本地 clone 直接改、直接推。新开对话时让它按这个顺序读：
 
 1. `tools/im-patch/README.md` 的「接手速查」+ 各轮补丁记录；
 2. `<DSH_HOME>\AGENTS.md` 的「IM 机器双开关」「群聊与第三方请求边界」章节；
@@ -67,7 +68,7 @@ scripts/push-with-token.mjs 带 token + 本地代理推送（token 放仓库外 
 
 不想自己交代背景：直接复制 [docs/NEW-SESSION.md](docs/NEW-SESSION.md) 里的开场白，粘给新会话，末尾补一句任务即可。
 
-GitHub 的这份仓库可以用来看改动历史和各版本源码，但**推送时机不一定跟本地同步**，排障以本地为准。
+排障时以本机已安装的插件（`<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im`）为准；仓库里的 `tools/im-patch` 是它的源码副本。个人值不在仓库里，样例见 [config.local.example.json](config.local.example.json)。
 
 ## 能力
 
@@ -88,10 +89,14 @@ GitHub 的这份仓库可以用来看改动历史和各版本源码，但**推�
 # 1. 安装 DSH 与插件
 #    DSH 商店或 npm 安装 @xmanrui/dsh-im，确认能收发 QQ 消息
 
-# 2. 打补丁（会先备份/还原 src，再重建 lib/index.js）
+# 2. 本地个人值（只用一次，之后不再需要改代码）
+Copy-Item config.local.example.json config.local.json
+#    然后按注释把 botId / QQ 数据目录 / 主人身份标识换成自己的；这个文件不会被提交
+
+# 3. 打补丁（会先备份/还原 src，再重建 lib/index.js）
 pwsh scripts/rebuild.ps1
 
-# 3. 重启 DSH，让新 bundle 生效
+# 4. 重启 DSH，让新 bundle 生效
 ```
 
 语音服务与模型：
@@ -114,10 +119,9 @@ node tools/im-patch/bot-profile.mjs list          # 每个 QQ 机器人的名字
 node tools/im-patch/bot-profile.mjs check         # 检查人设卡、唤醒词、GSV 参考音是否齐全
 node tools/im-patch/test-bot-profiles.mjs         # 多机器人人设/音色隔离回归
 node tools/im-patch/test-weixin-outbound-tags.mjs # 微信出站标签清理回归
-node scripts/check-mirror-sync.mjs                # 镜像是否与本机权威补丁目录逐字节一致
 ```
 
-同步方向是单向的：**权威 → 镜像**。镜像只作副本，不要反向覆盖更完整的权威源码；差异逐项说明，不用"整文件忽略"消除告警。
+个人值只写进仓库根的 `config.local.json`；`config.local.example.json` 只有键名和假值。新机器接手时先复制样例再填，代码里不出现任何真实值。
 
 ## 免责声明
 

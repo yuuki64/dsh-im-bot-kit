@@ -16,6 +16,9 @@
 - 风险评级：**低**（AppID / openid 不是密钥，泄露不能直接登录或操作 bot），但 QQ 号属于个人信息，会被爬虫抓。
 - `0 star / 0 fork`，实际上大概率没人看过。
 
+> 2026-10-31 更新：已用 `git filter-repo` 重写历史并强推（任务 H），上面第 1、3 节列的
+> 主人身份标识、QQ 号、appId、真实 botId、本机路径都已在历史里替换成占位值；原值本身仍需按第 4 节每次自查。
+
 ## 2. 本轮已清理（工作树）
 
 | 项 | 处理 |
@@ -57,8 +60,8 @@ git ls-files | Select-String -Pattern '\.(wav|mp3|ogg|pth|ckpt|onnx|safetensors|
 # 4.4 token 文件（必须显示 ignored）
 git status --porcelain --ignored | Select-String 'github-token'
 
-# 4.5 镜像是否和权威一致（只读）
-node scripts/check-mirror-sync.mjs
+# 4.5 本地个人值文件确实被忽略（应显示 config.local.json 在 ignored 列表里）
+git status --porcelain --ignored | Select-String 'config.local.json'
 ```
 
 ## 5. 永远不要进仓库的东西

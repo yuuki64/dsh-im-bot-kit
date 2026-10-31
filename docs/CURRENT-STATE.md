@@ -31,19 +31,20 @@
 - 补丁集只对 `@xmanrui/dsh-im@5.2.0` 有效。版本不符时 `apply.mjs` 默认拒绝；`--force` 等于把补丁文件**降级回 5.2.0**，不是升级方案。
 - 跨版本升级的正确顺序：用 `backup/src-orig` 与新版本源码对照重新推导补丁 → `apply` → `build` → 完全退出 DSH 再打开 → `verify-build.mjs`。
 
-## 权威位置（以本地为准）
+## 位置（GitHub 是唯一真源）
 
 | 对象 | 位置 | 说明 |
 | --- | --- | --- |
-| 权威补丁 | `<WORKSPACE>\tools\im-patch` | 真身；`backup/src-patched/` 是补丁源码，`manifest.mjs` 是唯一文件清单 |
+| 补丁源码 | `<WORKSPACE>\im-bot-kit\tools\im-patch` | 真身；`backup/src-patched/` 是补丁源码，`manifest.mjs` 是唯一文件清单 |
 | 已安装插件 | `<DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im` | 实际运行的是 `lib\index.js` |
-| 开源镜像 | `<WORKSPACE>\im-bot-kit`（GitHub `yuuki64/dsh-im-bot-kit`） | 副本，可能落后；只单向从权威同步 |
+| 仓库 | `<WORKSPACE>\im-bot-kit`（GitHub `yuuki64/dsh-im-bot-kit`） | 唯一真源；本地 clone 即工作副本 |
+| 个人值 | `<WORKSPACE>\im-bot-kit\config.local.json` | 已被 gitignore；样例 `config.local.example.json` |
 | DSH 行为规则 | `<DSH_HOME>\AGENTS.md` | 人设/群聊/权限的**提示词层**规则，不等于代码强制 |
 
 ## 有效构建与恢复入口
 
 ```powershell
-cd "<WORKSPACE>\tools\im-patch"
+cd "<WORKSPACE>\im-bot-kit\tools\im-patch"
 node apply.mjs --check     # 只看：22 个补丁文件是否还在安装目录里
 node apply.mjs             # 恢复源码 + 补 silk-wasm + 重新打包（之后必须完全退出 DSH 再打开）
 node build-im.mjs          # 只重新打包，并写 build-manifest.json（构建证据）
@@ -75,7 +76,7 @@ node status.mjs            # 当前状态（源码/产物/运行实例/开关）
 - 补丁源码与安装目录逐字节一致（期望 22 个文件，`node apply.mjs --check`）；
 - 从当前源码重新打包的结果与线上 `lib/index.js` **逐字节相同**（确定性构建，`node build-im.mjs --out <临时文件>` 后比 sha256）；
 - 构建基线已建立（`mode=adopt`），`verify-build.mjs` 四道门全部通过：补丁清单 / 源码已同步 / 产物已构建 / 进程已重启；
-- 镜像与权威补丁目录逐字节一致（37 个文件，`node scripts/check-mirror-sync.mjs`，`--strict-eol` 也通过）；另用临时副本删 1 个文件、改 1 个文件做真实负例，能准确报「缺文件 + 内容差异」且不动权威目录；
+- 个人值不在仓库里：botId / QQ 数据目录 / 主人身份标识 只写在 `config.local.json`（已 gitignore），脚本通过 `tools/im-patch/local-config.mjs` 读取；
 - 微信出站标签清理回归 10 项通过（`node tools/im-patch/test-weixin-outbound-tags.mjs`）；
 - 私聊/群聊双开关自测、会话工作区归属自测通过（`test-im-switch.mjs`、`test-workspace-grouping.mjs`）。
 

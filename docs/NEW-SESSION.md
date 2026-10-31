@@ -15,15 +15,16 @@
 工作区：<WORKSPACE>
 
 先按顺序读，再动手：
-1. <WORKSPACE>\tools\im-patch\README.md
+1. <WORKSPACE>\im-bot-kit\tools\im-patch\README.md
    （补丁集全记录，开头「接手速查」有全部路径 / 恢复 / 开关命令）
 2. <DSH_HOME>\AGENTS.md
    （重点「IM 机器双开关」「群聊与第三方请求边界」两章，是行为规则）
 3. 需要运行数据时再读：<DSH_HOME>\integrations\dsh-im\
    （switches.json / paused / voice.json / persona.md / group-history.sqlite）
    和 <DSH_HOME>\integrations\dsh-qq\
-4. GitHub 镜像 https://github.com/yuuki64/dsh-im-bot-kit 只作参考，可能落后；
-   排障一律以第 1、2 条和已安装插件为准。
+4. 仓库就是唯一真源（https://github.com/yuuki64/dsh-im-bot-kit），本地 clone 即工作副本；
+   个人值只在仓库根的 config.local.json（已 gitignore，样例 config.local.example.json），
+   代码和文档里不应出现真实值。排障以第 1、2 条和已安装插件为准。
 
 铁律：
 - 插件装在 <DSH_HOME>\profiles\desktop\node_modules\@xmanrui\dsh-im，跑的是 lib\index.js；
@@ -56,7 +57,7 @@ node tools/im-patch/apply.mjs --check
 | --- | --- |
 | 项目名 + 工作区路径 | 新窗口默认工作区可能不同；给绝对路径最稳 |
 | 两个必读文件 | `tools/im-patch/README.md` 是唯一完整的改动记录；`AGENTS.md` 是行为规则唯一来源 |
-| 「镜像可能落后」 | 防止它照 GitHub 上的旧副本改，改完白干 |
+| 「个人值在 config.local.json」 | 防止把真实 botId / 路径写回代码，再被提交出去 |
 | 「改 src 必须重新打包 + 重启」 | 最常见的坑：只改源码不打包，看起来改了其实没生效 |
 | 开关 / 暂停命令 | 排障第一步就是确认是不是自己关了通道 |
 | 两条基线自检 | 先确认"当前装的是什么、和备份是否一致"，避免拿着过期认知干活 |
