@@ -1,0 +1,10 @@
+{
+  "_readme": "复制本文件为仓库根的 config.local.json，再把下面的假值换成你自己的。config.local.json 已在 .gitignore 里，不会被提交；也可以用同名环境变量临时覆盖。",
+  "ownerId": "00000000000000000000000000000001",
+  "ownerName": "主人称呼（可选，只影响测试里的注入示例）",
+  "botIdHiro": "qq_000000000000000000000001",
+  "botIdYuri": "qq_000000000000000000000002",
+  "qqDataRoot": "C:/Users/<you>/Documents/Tencent Files",
+  "qqNumber": "1000000000",
+  "stickerImportOut": "./_sticker-import"
+}

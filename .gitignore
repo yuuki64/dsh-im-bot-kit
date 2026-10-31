@@ -35,3 +35,14 @@ logs/
 *.token
 .env
 .env.*
+
+# 本地个人值：botId / QQ 数据目录 / 主人身份标识；样例见 config.local.example.json
+config.local.json
+.env.local
+
+# 表情导入的中间产物（他人版权图片，不提交）
+_sticker-import/
+
+# Python 字节码
+__pycache__/
+*.pyc

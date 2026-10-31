@@ -7,11 +7,41 @@ import json
 import os
 import shutil
 
-# 路径不写死：用环境变量传你自己的（QQ_DATA 指向 "Tencent Files\<你的QQ号>"）
-QQ_DATA = os.environ.get("QQ_DATA", r"C:\Users\<you>\Documents\Tencent Files\<QQ号>")
+# 个人值不进仓库：环境变量优先，其次仓库根的 config.local.json（已 gitignore，样例见 config.local.example.json）。
+#   QQ_DATA            整体覆盖，指向 "Tencent Files\<你的QQ号>"
+#   qqDataRoot + qqNumber   config.local.json 里的写法，脚本自己拼上 QQ 号
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CONFIG_PATH = os.environ.get("IM_BOT_KIT_CONFIG") or os.path.join(_HERE, "..", "..", "config.local.json")
+
+
+def _local_config():
+    try:
+        with open(_CONFIG_PATH, "rb") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _local_value(key, env_name, default):
+    value = os.environ.get(env_name)
+    if value and value.strip():
+        return value.strip()
+    value = _local_config().get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+_QQ_DATA_ENV = (os.environ.get("QQ_DATA") or "").strip()
+if _QQ_DATA_ENV:
+    QQ_DATA = _QQ_DATA_ENV
+else:
+    _ROOT = _local_value("qqDataRoot", "", "")
+    _NUMBER = _local_value("qqNumber", "", "")
+    QQ_DATA = os.path.join(_ROOT, _NUMBER) if _ROOT and _NUMBER else os.path.join(os.getcwd(), "Tencent Files", "<QQ号>")
 ORI = os.path.join(QQ_DATA, r"nt_qq\nt_data\Emoji\personal_emoji\Ori")
 THUMB = os.path.join(QQ_DATA, r"nt_qq\nt_data\Emoji\personal_emoji\Thumb")
-OUT = os.environ.get("STICKER_IMPORT_OUT", r".\_sticker-import")
+OUT = _local_value("stickerImportOut", "STICKER_IMPORT_OUT", r".\_sticker-import")
 LIMIT = 500
 MAX_BYTES = 3 * 1024 * 1024 - 4096
 BATCH_SIZE = 34

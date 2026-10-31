@@ -136,6 +136,17 @@ GPT-SoVITS 微调产物：`<TOOLS>\gpt-sovits\weights\dafeiyu_e4_s16.pth`，推�
 { "version": 1, "dirs": ["<DSH_HOME>/integrations/dsh-im/stickers", "<QQ_DATA>/Tencent Files/<QQ号>/nt_qq/nt_data/Emoji/emoji-related/emoji"], "maxBytes": 3145728 }
 ```
 
+`config.local.json`（仓库根，已被 gitignore；样例 `config.local.example.json`）
+
+```json
+{ "ownerId": "<主人身份标识>", "botIdHiro": "qq_…", "botIdYuri": "qq_…",
+  "qqDataRoot": "<Tencent Files 目录>", "qqNumber": "<QQ号>" }
+```
+
+- 这些键只给本机脚本用（`test-bot-wake.mjs`、`sticker-qq-import.py`），运行时插件不读它。
+- 优先级：同名环境变量 > `config.local.json`。`IM_BOT_KIT_CONFIG` 可指向别的配置文件。
+- 新机器接手：`Copy-Item config.local.example.json config.local.json` 后按注释填。
+
 ## 5. 群聊行为速查
 
 - 点名：`yuri` / `小鲸鱼` / `DeepSeek` / `大肥鱼`（大肥鱼是雷点，会炸毛）
@@ -193,7 +204,7 @@ venv、node_modules。恢复时解压后按第 2 节重打补丁、按第 3 节�
 - 每周：DSH/插件是否更新 → 更新后重跑 `scripts/rebuild.ps1` 并重启
 - 每周：看一次 `server.err.log` 与 `logs\dsh-im` 有无新错误
 - 每月：备份 `%DSH_HOME%\integrations\dsh-im`（配置 + 表情 + 人设）和语音权重
-- 换电脑：装 DSH + 插件 → clone 本仓库 → 改路径常量 → 放回模型/表情 → 重建
+- 换电脑：装 DSH + 插件 → clone 本仓库 → 复制 `config.local.example.json` 成 `config.local.json` 填个人值 → 放回模型/表情 → 重建
 
 ## 9. 版本与发布（GitHub Releases）
 
