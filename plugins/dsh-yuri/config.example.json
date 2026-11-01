@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "botId": "qq_000000000000000000000000",
+  "allowedGroups": [
+    "GROUP_OPENID_PLACEHOLDER"
+  ],
+  "turnTimeoutMs": 120000,
+  "debugLogText": false
+}

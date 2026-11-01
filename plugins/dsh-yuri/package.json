@@ -1,0 +1,25 @@
+{
+  "name": "dsh-yuri",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal QQ group @ -> restricted agent -> reply loop for DeepSeek Harness.",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src/*.mjs",
+    "cordis.patch.yml",
+    "config.example.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
