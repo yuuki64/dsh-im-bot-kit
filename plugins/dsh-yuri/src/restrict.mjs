@@ -40,11 +40,13 @@ export function listVisibleToolNames(tools, scope) {
 }
 
 /**
- * 工具限制器，fail-closed：
- * 1. 探测全局工具名；
- * 2. 优先 deny 全部探测到的名字（跳过已拒绝的、跳过 run_code）；
- * 3. 探测不到就兜底 `restrict({ allow: [] })`；
- * 4. 两条都失败 → 抛出，调用方（setup）失败，本回合不跑 Agent、不发送。
+ * 工具限制器，白名单为主、deny 为辅：
+ * 1. 每个实例首次 apply 先 `restrict({ allow: [] })`：失败直接抛出（fail-closed），
+ *    成功后不再重复（限制在 dispose 时才解除）；
+ * 2. 再探测全局工具名，把探测到的名字 deny 掉：这一层只是纵深防御 + 发现
+ *    "晚注册"的新名字，任何失败都只 warn，不抛出（白名单已经生效）；
+ * 3. 最后读 `visible`，交给调用方做发送前置检查。
+ *
  * @param {{ log?: { info: Function, warn: Function, error: Function } }} [options]
  */
 export function createToolRestrictor({ log } = {}) {
@@ -58,6 +60,16 @@ export function createToolRestrictor({ log } = {}) {
   }
 
   /**
+   * 第一层：白名单。失败必须向上抛，让调用方 fail-closed。
+   * @param {{ restrict: (filter: object) => unknown }} tools
+   */
+  function applyAllowEmpty(tools) {
+    remember(tools.restrict({ allow: [] }))
+    allowEmptyApplied = true
+  }
+
+  /**
+   * 第二层：探测全局工具名。任何失败都只返回错误，不抛。
    * @param {{ restrict?: (filter: object) => unknown }} tools
    * @returns {{ names: string[] | null, error?: unknown, unexpected?: boolean }}
    */
@@ -92,44 +104,50 @@ export function createToolRestrictor({ log } = {}) {
     apply({ tools, scope } = {}) {
       if (typeof tools?.restrict !== 'function') throw new Error('tools.restrict unavailable')
 
+      // 第一层：只做一次。抛错即 fail-closed。
+      if (!allowEmptyApplied) applyAllowEmpty(tools)
+
+      // 第二层：探测 + deny。失败只 warn。
       const probed = probe(tools)
       if (probed.unexpected) log?.warn('restrict-probe-unexpectedly-accepted', { probe: PROBE_TOOL_NAME })
 
+      let fresh = []
       if (Array.isArray(probed.names)) {
-        const fresh = probed.names.filter((name) => name !== RESERVED_TRANSPORT && !denied.has(name))
+        fresh = probed.names.filter((name) => name !== RESERVED_TRANSPORT && !denied.has(name))
         if (fresh.length > 0) {
-          // 失败即向上抛：调用方 fail-closed。
-          remember(tools.restrict({ deny: fresh }))
-          for (const name of fresh) denied.add(name)
+          try {
+            remember(tools.restrict({ deny: fresh }))
+            for (const name of fresh) denied.add(name)
+          } catch (error) {
+            // 白名单已生效；deny 失败不影响本回合，只是这层防线没补上。
+            log?.warn('restrict-deny-failed', {
+              names: fresh,
+              error: String(error?.message ?? error),
+            })
+          }
         }
-        mode = 'deny'
-        const visible = listVisibleToolNames(tools, scope)
-        log?.info('restrict-applied', {
-          mode,
-          denied: denied.size,
-          known: probed.names.length,
-          fresh: fresh.length,
-          visible: visible === null ? 'unknown' : visible.length,
-        })
-        return { mode, denied: [...denied], visible, fresh }
+        mode = 'allow-empty+deny'
+      } else {
+        if (!probed.unexpected) {
+          log?.warn('restrict-probe-failed', { error: String(probed.error?.message ?? probed.error) })
+        }
+        mode = 'allow-empty'
       }
 
-      if (allowEmptyApplied) {
-        const visible = listVisibleToolNames(tools, scope)
-        log?.info('restrict-reapplied', { mode, visible: visible === null ? 'unknown' : visible.length })
-        return { mode, denied: [...denied], visible, fresh: [] }
-      }
-
-      // 探测不到名单：兜底隐藏全部继承工具。这里同样失败即抛。
-      remember(tools.restrict({ allow: [] }))
-      allowEmptyApplied = true
-      mode = 'allow-empty'
       const visible = listVisibleToolNames(tools, scope)
-      log?.info('restrict-applied', { mode, visible: visible === null ? 'unknown' : visible.length })
-      return { mode, denied: [...denied], visible, fresh: [] }
+      log?.info('restrict-applied', {
+        mode,
+        denied: denied.size,
+        known: Array.isArray(probed.names) ? probed.names.length : 'unknown',
+        fresh: fresh.length,
+        visible: visible === null ? 'unknown' : visible.length,
+      })
+      return { mode, denied: [...denied], visible, fresh }
     },
     /** 解除本实例持有的全部限制（正常路径由 agent scope 自动回收，这里只是兜底）。 */
     dispose() {
+      // 解除之后如果还被复用，下一次 apply 必须重新落白名单。
+      allowEmptyApplied = false
       for (const disposer of disposers.splice(0)) {
         try {
           disposer()

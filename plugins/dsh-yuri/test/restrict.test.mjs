@@ -9,6 +9,18 @@ import {
   parseKnownToolNames,
 } from '../src/restrict.mjs'
 
+/** 只记录日志，不改行为。 */
+function recordingLog() {
+  const entries = []
+  return {
+    entries,
+    debugText: false,
+    info: (message, fields) => entries.push({ level: 'info', message, fields }),
+    warn: (message, fields) => entries.push({ level: 'warn', message, fields }),
+    error: (message, fields) => entries.push({ level: 'error', message, fields }),
+  }
+}
+
 const silentLog = { info() {}, warn() {}, error() {} }
 
 function fakeTools(options = {}) {
@@ -52,44 +64,72 @@ function fakeTools(options = {}) {
   }
 }
 
+const isAllowEmpty = (call) => Array.isArray(call.allow) && call.allow.length === 0 && call.deny === undefined
+const isDeny = (call) => call.deny !== undefined
+
 test('parseKnownToolNames 从报错文本里取名单', () => {
   assert.deepEqual(parseKnownToolNames(new Error('boom; known global tools: "a", b , c')), ['a', 'b', 'c'])
   assert.equal(parseKnownToolNames(new Error('boom')), null)
   assert.equal(parseKnownToolNames(new Error('known global tools: ')), null)
 })
 
-test('探测成功 → deny 探测到的全部名称（跳过 run_code）', () => {
+test('白名单先落，再 deny 探测到的全部名称（跳过 run_code）', () => {
   const tools = fakeTools()
   const restrictor = createToolRestrictor({ log: silentLog })
   const result = restrictor.apply({ tools, scope: {} })
-  assert.equal(result.mode, 'deny')
+
+  assert.equal(tools.calls[0] !== undefined, true)
+  assert.ok(isAllowEmpty(tools.calls[0]), '第一次调用必须是 restrict({ allow: [] })')
   assert.deepEqual([...result.denied].sort(), ['read_file', 'web_search'])
-  const denyCall = tools.calls.find((call) => call.deny !== undefined)
+  assert.equal(result.mode, 'allow-empty+deny')
+  const denyCall = tools.calls.find(isDeny)
   assert.ok(denyCall, '必须发出一次 deny')
   assert.ok(!denyCall.deny.includes(RESERVED_TRANSPORT), 'run_code 不能出现在 deny 名单里')
 })
 
-test('探测失败（无名单）→ 兜底 allow: []', () => {
+test('探测失败（无名单）→ 白名单仍然生效，不抛', () => {
   const tools = fakeTools({ probe: 'throw-no-list' })
-  const restrictor = createToolRestrictor({ log: silentLog })
+  const log = recordingLog()
+  const restrictor = createToolRestrictor({ log })
   const result = restrictor.apply({ tools })
+
   assert.equal(result.mode, 'allow-empty')
-  assert.ok(tools.calls.some((call) => Array.isArray(call.allow) && call.allow.length === 0 && call.deny === undefined))
+  assert.ok(tools.calls.some(isAllowEmpty))
+  assert.ok(
+    log.entries.some((entry) => entry.level === 'warn' && entry.message === 'restrict-probe-failed'),
+    '探测失败必须留一条 warn',
+  )
 })
 
-test('两条都失败 → 抛出（fail-closed）', () => {
-  const tools = fakeTools({ probe: 'throw-no-list', allowFails: true })
+test('allow:[] 失败 → 抛出（fail-closed），不再继续探测/deny', () => {
+  const tools = fakeTools({ allowFails: true })
   const restrictor = createToolRestrictor({ log: silentLog })
   assert.throws(() => restrictor.apply({ tools }), /allow failed/)
+  assert.ok(!tools.calls.some(isDeny), '白名单没落下就不该继续 deny')
 })
 
-test('deny 失败 → 抛出（fail-closed）', () => {
+test('allow:[] 成功、探测失败 → apply 不抛，只有 warn', () => {
+  const tools = fakeTools({ probe: 'throw-no-list' })
+  const log = recordingLog()
+  const restrictor = createToolRestrictor({ log })
+  assert.doesNotThrow(() => restrictor.apply({ tools }))
+  assert.equal(log.entries.filter((entry) => entry.level === 'warn').length, 1)
+})
+
+test('deny 失败 → 只 warn，不抛，也不计入 denied', () => {
   const tools = fakeTools({ denyFails: true })
-  const restrictor = createToolRestrictor({ log: silentLog })
-  assert.throws(() => restrictor.apply({ tools }), /deny failed/)
+  const log = recordingLog()
+  const restrictor = createToolRestrictor({ log })
+  const result = restrictor.apply({ tools })
+
+  assert.equal(result.mode, 'allow-empty+deny')
+  assert.deepEqual(result.denied, [])
+  const warn = log.entries.find((entry) => entry.message === 'restrict-deny-failed')
+  assert.ok(warn, 'deny 失败必须留一条 warn')
+  assert.deepEqual(warn.fields.names.sort(), ['read_file', 'web_search'])
 })
 
-test('探测意外被接受 → 立即解除，并回落到 allow: []', () => {
+test('探测意外被接受 → 立即解除，并回落到白名单', () => {
   const tools = fakeTools({ probe: 'accept' })
   const restrictor = createToolRestrictor({ log: silentLog })
   const result = restrictor.apply({ tools })
@@ -97,15 +137,20 @@ test('探测意外被接受 → 立即解除，并回落到 allow: []', () => {
   assert.ok(tools.calls.some((call) => call.probeDisposed === true), '探测性限制必须被解除')
 })
 
-test('第二次调用幂等：没有新工具就不再发 deny', () => {
+test('第二次调用幂等：allow:[] 只落一次，没有新工具就不再发 deny', () => {
   const tools = fakeTools()
   const restrictor = createToolRestrictor({ log: silentLog })
   restrictor.apply({ tools })
-  const before = tools.calls.filter((call) => call.deny !== undefined).length
+  const allowBefore = tools.calls.filter(isAllowEmpty).length
+  const denyBefore = tools.calls.filter(isDeny).length
   const second = restrictor.apply({ tools })
-  const after = tools.calls.filter((call) => call.deny !== undefined).length
-  assert.equal(after, before)
-  assert.equal(second.mode, 'deny')
+  const allowAfter = tools.calls.filter(isAllowEmpty).length
+  const denyAfter = tools.calls.filter(isDeny).length
+
+  assert.equal(allowBefore, 1)
+  assert.equal(allowAfter, 1, '白名单不能重复落')
+  assert.equal(denyAfter, denyBefore)
+  assert.equal(second.mode, 'allow-empty+deny')
   assert.deepEqual(second.fresh, [])
 })
 

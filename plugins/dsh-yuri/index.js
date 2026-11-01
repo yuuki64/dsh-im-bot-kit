@@ -7,6 +7,7 @@ import { loadConfig } from './src/config.mjs'
 import { buildPrompt, isAddressed } from './src/prompt.mjs'
 import { extractTurnReply, segmentReply } from './src/reply-text.mjs'
 import { createToolRestrictor } from './src/restrict.mjs'
+import { inspectTurnEvents } from './src/turn-guard.mjs'
 import { createGroupSessions } from './src/group-session.mjs'
 import { createLogger, shortId } from './src/logger.mjs'
 
@@ -192,19 +193,33 @@ async function describeWithRetry(dshIm, botId, log) {
 }
 
 /**
- * 一个回合：取/建会话 → 幂等重放工具限制 → followup → whenIdle → 取文本。
+ * 一个回合：取/建会话 → 重放工具限制 → 后置检查 → followup → whenIdle
+ * → 发送前守卫 → 取文本。导出仅为单测。
  * @param {any} state
  * @param {{ event: any, sessionId: string, signal: AbortSignal }} input
  */
-async function runTurn(state, { event, sessionId, signal }) {
+export async function runTurn(state, { event, sessionId, signal }) {
   const { log } = state
   let record = state.sessions.get(sessionId)
   if (record === undefined) {
     record = await createSession(state, sessionId)
   }
 
-  // 每个回合前再幂等执行一次：应对 MCP 等晚注册的全局工具。失败即 fail-closed。
-  record.restrictor.apply({ tools: record.agentCtx.tools, scope: record.agent })
+  // 白名单已在 createSession 首次 apply 时落下；这里再幂等重放一次，
+  // 只为补上 MCP 等晚注册的全局工具（第二层 deny 是诊断/纵深防御）。
+  const restricted = record.restrictor.apply({ tools: record.agentCtx.tools, scope: record.agent })
+
+  // 后置条件：模型侧必须一个工具都看不到。null 也算失败（取不到 ≠ 没有）。
+  if (!Array.isArray(restricted?.visible) || restricted.visible.length > 0) {
+    const names = Array.isArray(restricted?.visible) ? restricted.visible : null
+    log.error('restrict-postcondition-failed', {
+      session: shortId(sessionId),
+      visible: names === null ? 'unknown' : names.length,
+      names: names ?? 'unknown',
+    })
+    await discardSession(state, sessionId, 'restrict-postcondition-failed')
+    return {}
+  }
 
   const prompt = buildPrompt(event)
   log.info('turn-prompt', {
@@ -245,6 +260,20 @@ async function runTurn(state, { event, sessionId, signal }) {
 
   if (signal?.aborted) return {}
 
+  // 发送前守卫：本回合出现过工具活动 / 请求侧工具清单非空 / 没有可继承的
+  // header → 不发，丢弃会话，下一条消息重建干净会话。
+  const guard = inspectTurnEvents(buffer, record.lastHeaderTools ?? null)
+  if (!guard.ok) {
+    log.error(guard.reason, {
+      session: shortId(sessionId),
+      ...(guard.calls === undefined ? {} : { calls: guard.calls }),
+      ...(guard.tools === undefined ? {} : { tools: guard.tools }),
+    })
+    await discardSession(state, sessionId, guard.reason)
+    return {}
+  }
+  record.lastHeaderTools = guard.tools
+
   const verdict = extractTurnReply(buffer)
   if (!verdict.ok) {
     log.info('turn-no-reply', { session: shortId(sessionId), reason: verdict.reason })
@@ -252,6 +281,29 @@ async function runTurn(state, { event, sessionId, signal }) {
   }
   log.info('turn-reply', { session: shortId(sessionId), len: verdict.text.length })
   return { text: verdict.text }
+}
+
+/**
+ * 丢弃一个会话：先移出 map（防止并发复用），再解除限制、释放句柄。
+ * @param {any} state
+ * @param {string} sessionId
+ * @param {string} reason
+ */
+async function discardSession(state, sessionId, reason) {
+  const record = state.sessions.get(sessionId)
+  if (record === undefined) return
+  state.sessions.delete(sessionId)
+  try {
+    record.restrictor?.dispose()
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    await record.handle?.dispose()
+  } catch {
+    /* 忽略 */
+  }
+  state.log?.info('session-discarded', { session: shortId(sessionId), reason })
 }
 
 /**
@@ -266,22 +318,40 @@ async function createSession(state, sessionId) {
   let agentCtx
   let agent
 
-  const handle = await agents.create({
-    sessionId,
-    agentOptions: { provider: selection.provider, model: selection.model },
-    meta: { cwd: workspace },
-    setup: (scopedCtx, createdAgent) => {
-      agentCtx = scopedCtx
-      agent = createdAgent
-      const info = restrictor.apply({ tools: scopedCtx.tools, scope: createdAgent })
-      log.info('restricted', {
-        session: shortId(sessionId),
-        mode: info.mode,
-        denied: info.denied.length,
-        visible: info.visible === null ? 'unknown' : info.visible.length,
-      })
-    },
-  })
+  let handle
+  try {
+    handle = await agents.create({
+      sessionId,
+      agentOptions: { provider: selection.provider, model: selection.model },
+      meta: { cwd: workspace },
+      setup: (scopedCtx, createdAgent) => {
+        agentCtx = scopedCtx
+        agent = createdAgent
+        const info = restrictor.apply({ tools: scopedCtx.tools, scope: createdAgent })
+        log.info('restricted', {
+          session: shortId(sessionId),
+          mode: info.mode,
+          denied: info.denied.length,
+          visible: info.visible === null ? 'unknown' : info.visible.length,
+        })
+        // 首次 apply 之后必须一个工具都看不到；否则让会话创建失败。
+        if (!Array.isArray(info.visible) || info.visible.length > 0) {
+          throw new Error(
+            `restrict-postcondition-failed: visible=${
+              info.visible === null ? 'unknown' : info.visible.length
+            }`,
+          )
+        }
+      },
+    })
+  } catch (error) {
+    try {
+      restrictor.dispose()
+    } catch {
+      /* 忽略 */
+    }
+    throw error
+  }
 
   const record = {
     sessionId,
@@ -289,6 +359,8 @@ async function createSession(state, sessionId) {
     agent: agent ?? handle.agent,
     agentCtx,
     restrictor,
+    /** 最近一次见到的 request/header 工具数；null = 本会话尚未见过。 */
+    lastHeaderTools: null,
   }
   state.sessions.set(sessionId, record)
   log.info('session-created', {
